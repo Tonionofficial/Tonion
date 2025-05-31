@@ -1,0 +1,5881 @@
+// Подключение модуля отладки
+// Модуль debug.js должен быть подключен через тег script в HTML
+
+// Modal Module for RPG App
+// This module handles modal windows, item details display, and modal animations
+
+// Modal element cache
+let modalElement = null;
+let modalOverlay = null;
+let modalContent = null;
+let modalGlow = null;
+let currentModalType = null;
+let isOpen = false;
+
+// Объект для хранения ресурсов пользователя
+let userResources = {};
+let playerLevel = 1; // Добавляем переменную для хранения уровня персонажа
+let userInventory = [];
+let lastServerRequestTime = 0;
+const SERVER_REQUEST_THROTTLE = 30000; // 30 секунд между запросами
+
+// Временные переменные для дополнительных состояний UI
+let pendingCraft = false;
+let pendingMaterials = {};
+
+// Добавляем переменную для хранения информации о крафтовых установках
+let craftingInstallations = {
+  campfire: false,
+  furnace: false
+};
+
+// Глобальные переменные
+let isLoading = false;
+let hasClickListeners = false;
+let activeInstance = null;
+let isInventoryLoading = false;
+let activeRecipeId = null;
+
+// Функция для проверки, является ли предмет ресурсным (должен быть в resources, а не в inventory)
+function isResourceItem(itemId) {
+  if (!itemId) return false;
+  
+  // Список базовых ресурсов
+  const basicResourceItems = [
+    'rope', 'crushedrock', 'ironingot', 'iron ore', 'ironore', 'iron_ore',
+    'wood', 'wood log', 'wood_log', 'woodlog', 
+    'rock', 'stone', 
+    'fiber', 'cloth', 
+    'berry', 'berries', 
+    'herb', 'herbs', 
+    'stick', 
+    'mushroom', 'mushrooms',
+    'coal',
+    'gold ore', 'gold_ore', 'goldore',
+    'gold ingot', 'gold_ingot', 'goldingot',
+    'iron ingot', 'iron_ingot',
+    'copper ore', 'copper_ore', 'copperore',
+    'copper ingot', 'copper_ingot', 'copperingot',
+    'silver ore', 'silver_ore', 'silverore',
+    'silver ingot', 'silver_ingot', 'silveringot'
+  ];
+  
+  const normalizedItemId = itemId.toLowerCase();
+  
+  // Проверяем по списку базовых ресурсов
+  if (basicResourceItems.includes(normalizedItemId)) {
+    return true;
+  }
+  
+  // Дополнительная проверка по типу предмета (если доступен)
+  // Проверяем itemId на соответствие названиям типов ресурсов
+  const resourceTypePatterns = [
+    /ore$/i, /ingot$/i, /log$/i, /stone$/i, /rock$/i, /wood$/i, 
+    /fiber$/i, /herb$/i, /berry$/i, /^raw /i, /material$/i, /resource$/i
+  ];
+  
+  // Список предметов, которые соответствуют шаблонам ресурсов, но не являются ресурсами
+  const nonResourceExceptions = [
+    'cooked meat', 'cookedmeat', 'roasted meat', 'roastedmeat', 'fried meat', 'friedmeat'
+  ];
+  
+  // Проверяем исключения
+  if (nonResourceExceptions.some(exception => normalizedItemId.includes(exception))) {
+    return false;
+  }
+  
+  // Если itemId соответствует паттерну ресурса, считаем его ресурсом
+  for (const pattern of resourceTypePatterns) {
+    if (pattern.test(normalizedItemId)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Функция для сохранения ресурсов в localStorage (для использования из CraftingModule)
+const saveResourcesForModals = (resources) => {
+  if (!resources || typeof resources !== 'object') return false;
+  
+  try {
+    // Обновляем только внутреннюю переменную модуля и глобальную переменную
+    userResources = {...resources};
+    window.globalUserResources = {...resources};
+    
+    // Обновляем в IndexedDB как вторичный кэш
+    if (typeof updateUserResourcesInIndexedDB === 'function') {
+      updateUserResourcesInIndexedDB(resources)
+        .catch(error => {
+          // Ошибка при обновлении ресурсов в IndexedDB
+          return false;
+        });
+    }
+    
+    return true;
+  } catch (error) {
+    // Ошибка при сохранении ресурсов для модального модуля
+    return false;
+  }
+};
+
+// Публичная версия
+window.saveResourcesForModals = saveResourcesForModals;
+
+// Функция для очистки всех ресурсов пользователя
+const clearAllResourcesForModals = () => {
+  try {
+    // Очищаем внутреннюю переменную и глобальную переменную
+    userResources = {};
+    window.globalUserResources = {};
+    
+    // ИСПРАВЛЕНО: Безопасное получение telegramId
+    let telegramId;
+    if (window.Telegram && window.Telegram.WebApp && 
+        window.Telegram.WebApp.initDataUnsafe && 
+        window.Telegram.WebApp.initDataUnsafe.user && 
+        window.Telegram.WebApp.initDataUnsafe.user.id) {
+      telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+    }
+    
+    if (telegramId && typeof updateUserResourcesInIndexedDB === 'function') {
+      updateUserResourcesInIndexedDB({})
+        .catch(error => {
+          // Ошибка при очистке ресурсов в IndexedDB
+          return false;
+        });
+    }
+    
+    return true;
+  } catch (error) {
+    // Ошибка при очистке ресурсов
+    return false;
+  }
+};
+
+// Create and initialize modal elements
+const initializeModal = () => {
+  if (modalElement) return;
+
+  // Create overlay
+  modalOverlay = document.createElement('div');
+  modalOverlay.className = 'modal-overlay';
+  modalOverlay.style.position = 'fixed';
+  modalOverlay.style.top = '0';
+  modalOverlay.style.left = '0';
+  modalOverlay.style.width = '100%';
+  modalOverlay.style.height = '100%';
+  modalOverlay.style.backgroundColor = 'rgba(0, 0, 30, 0.4)';
+  modalOverlay.style.display = 'none';
+  modalOverlay.style.zIndex = '9998';
+  modalOverlay.style.backdropFilter = 'blur(12px)';
+  modalOverlay.style.webkitBackdropFilter = 'blur(12px)';
+  
+  // Create modal container
+  modalElement = document.createElement('div');
+  modalElement.className = 'rpg-modal';
+  modalElement.style.position = 'fixed';
+  modalElement.style.top = '50%';
+  modalElement.style.left = '50%';
+  modalElement.style.transform = 'translate(-50%, -50%)';
+  modalElement.style.background = 'linear-gradient(135deg, rgba(0, 0, 50, 0.9) 0%, rgba(0, 0, 30, 0.95) 100%)';
+  modalElement.style.borderRadius = '15px';
+  modalElement.style.boxShadow = '0 0 30px rgba(0, 0, 0, 0.8)'; // Оставляем тень без изменений
+  modalElement.style.maxWidth = '90%';
+  modalElement.style.maxHeight = '90%';
+  modalElement.style.minWidth = '250px'; // Добавляем минимальную ширину
+  modalElement.style.overflow = 'hidden';
+  modalElement.style.display = 'none';
+  modalElement.style.zIndex = '9999';
+  modalElement.style.border = '2px solid rgba(0,255,255,0.35)';
+  modalElement.style.borderTop = '2.5px solid #00fff7';
+  modalElement.style.borderBottom = '2.5px solid #00fff7';
+  
+  // Добавляем стиль, чтобы все дочерние элементы наследовали фон
+  const modalStyles = document.createElement('style');
+  modalStyles.textContent = `
+    .rpg-modal.modal-open {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+      transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+    }
+    
+    .rpg-modal:not(.modal-open) {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.95);
+    }
+
+    .rpg-modal *:not(.item-image-container):not(.item-rarity-badge):not(.modal-close):not(.item-footer) {
+      border: none;
+    }
+    
+    /* Футуристический стиль для кнопок внутри модальных окон */
+    .rpg-modal button.modal-button {
+      background: linear-gradient(90deg, rgba(0,255,255,0.25) 0%, rgba(0,255,255,0.12) 100%);
+      color: #00fff7;
+      border: 2px solid #00fff7;
+      border-radius: 16px;
+      font-weight: bold;
+      font-size: 1.1rem;
+      letter-spacing: 1px;
+      box-shadow: 0 0 16px 2px rgba(0,255,255,0.53), 0 0 2px 0 #fff;
+      text-shadow: 0 0 8px #00fff7, 0 0 2px #fff;
+      padding: 10px 24px;
+      margin: 8px 0;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+      outline: none;
+      backdrop-filter: blur(2px);
+    }
+    
+    .rpg-modal button.modal-button:hover, 
+    .rpg-modal button.modal-button:focus {
+      background: linear-gradient(90deg, rgba(0,255,255,0.35) 0%, rgba(0,255,255,0.18) 100%);
+      color: #fff;
+      border-color: #00fff7;
+    }
+    
+    .rpg-modal button.modal-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    /* Футуристический стиль для прогресс-баров */
+    .rpg-modal .progress-bar-container {
+      width: 100%;
+      background: rgba(0,255,255,0.08);
+      border-radius: 12px;
+      border: 1.5px solid #00fff7;
+      box-shadow: 0 0 8px rgba(0,255,255,0.33);
+      overflow: hidden;
+      margin: 12px 0 8px 0;
+      position: relative;
+    }
+    
+    .rpg-modal .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #00fff7 0%, #00bfff 100%);
+      box-shadow: 0 0 16px rgba(0,255,255,0.8), 0 0 2px #fff;
+      border-radius: 12px;
+      transition: width 0.5s cubic-bezier(.4,2,.6,1);
+      filter: blur(0.5px);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .rpg-modal .progress-bar::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+      animation: progressBarShine 2s linear infinite;
+      transform: skewX(-20deg);
+      pointer-events: none;
+    }
+    
+    @keyframes progressBarShine {
+      0% { transform: translateX(-100%) skewX(-20deg); }
+      100% { transform: translateX(200%) skewX(-20deg); }
+    }
+  `;
+  document.head.appendChild(modalStyles);
+  
+  // Создаем эффект свечения для модального окна
+  modalGlow = document.createElement('div');
+  modalGlow.className = 'modal-glow';
+  modalGlow.style.position = 'absolute';
+  modalGlow.style.top = '-5px';
+  modalGlow.style.left = '-5px';
+  modalGlow.style.right = '-5px';
+  modalGlow.style.bottom = '-5px';
+  modalGlow.style.borderRadius = '14px';
+  modalGlow.style.zIndex = '-1';
+  modalGlow.style.display = 'none';
+  
+  // Create modal content container
+  modalContent = document.createElement('div');
+  modalContent.className = 'modal-content';
+  modalContent.style.padding = '20px';
+  modalContent.style.border = 'none';
+  modalContent.style.boxShadow = 'none';
+  // modalContent.style.backgroundColor = 'transparent';
+  modalContent.style.borderRadius = '0';
+  modalContent.style.margin = '0';
+  modalContent.style.width = '100%';
+  modalContent.style.height = '100%';
+  modalContent.style.overflow = 'auto';
+  
+  // Create close button
+  const closeButton = document.createElement('div');
+  closeButton.className = 'modal-close';
+  closeButton.innerHTML = '×';
+  closeButton.style.position = 'absolute';
+  closeButton.style.top = '1px';
+  closeButton.style.right = '1px';
+  closeButton.style.fontSize = '36px';
+  closeButton.style.color = '#00fff7';
+  closeButton.style.cursor = 'pointer';
+  closeButton.style.zIndex = '10000';
+  closeButton.style.width = '30px';
+  closeButton.style.height = '30px';
+  closeButton.style.display = 'flex';
+  closeButton.style.alignItems = 'center';
+  closeButton.style.justifyContent = 'center';
+  closeButton.style.borderRadius = '50%';
+  closeButton.style.backgroundColor = 'rgba(0, 0, 40, 0.6)';
+  closeButton.style.border = '1.5px solid rgba(0, 255, 255, 0.4)';
+  closeButton.style.boxShadow = '0 0 8px rgba(0, 255, 255, 0.3)';
+  closeButton.style.transition = 'all 0.2s ease';
+  closeButton.style.textShadow = '0 0 8px #00fff7, 0 0 2px #fff';
+  closeButton.onmouseover = () => {
+    closeButton.style.color = '#fff';
+    closeButton.style.backgroundColor = 'rgba(255, 0, 0, 0.5)';
+    closeButton.style.transform = 'scale(1.1)';
+    closeButton.style.boxShadow = '0 0 12px rgba(0, 255, 255, 0.5)';
+  };
+  closeButton.onmouseout = () => {
+    closeButton.style.color = '#00fff7';
+    closeButton.style.backgroundColor = 'rgba(0, 0, 40, 0.6)';
+    closeButton.style.transform = 'scale(1)';
+    closeButton.style.boxShadow = '0 0 8px rgba(0, 255, 255, 0.3)';
+  };
+  closeButton.onclick = () => {
+    closeModal();
+  };
+  
+  // Assemble modal
+  modalElement.appendChild(closeButton);
+  modalElement.appendChild(modalContent);
+  document.body.appendChild(modalOverlay);
+  document.body.appendChild(modalElement);
+  // Добавляем свечение за модальным окном
+  document.body.appendChild(modalGlow);
+  
+  // Add click handler to overlay for closing
+  modalOverlay.onclick = (event) => {
+    if (event.target === modalOverlay) {
+      closeModal();
+    }
+  };
+  
+  // Add escape key handler
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isOpen) {
+      closeModal();
+    }
+  });
+  
+  // Инициализация завершена
+};
+
+// Close any open modal
+const closeModal = () => {
+  if (!isOpen) return;
+  
+  // Убираем класс для открытого состояния и добавляем класс для анимации закрытия
+  modalElement.classList.remove('modal-open');
+  modalElement.classList.add('modal-closing');
+  
+  // Очищаем интервал анимации, если он существует
+  if (window.modalAnimationInterval) {
+    clearInterval(window.modalAnimationInterval);
+    window.modalAnimationInterval = null;
+  }
+  
+  // Используем очень короткий таймаут для анимации закрытия
+  setTimeout(() => {
+    modalElement.style.display = 'none';
+    modalOverlay.style.display = 'none';
+    modalElement.classList.remove('modal-closing');
+    isOpen = false;
+    currentModalType = null;
+    modalContent.innerHTML = '';
+  }, 200); // Увеличиваем время для анимации
+};
+
+// Добавляем функцию для показа модального окна
+const showModal = () => {
+  if (!modalElement || !modalOverlay) {
+    return;
+  }
+  
+  // Установка стилей за один раз
+  modalOverlay.style.display = 'block';
+  modalElement.style.display = 'block';
+  
+  // Используем requestAnimationFrame для более плавной анимации
+  requestAnimationFrame(() => {
+    modalElement.classList.add('modal-open');
+    isOpen = true;
+  });
+};
+
+// Добавляем функцию для скрытия модального окна
+const hideModal = () => {
+  if (!modalElement || !isOpen) return;
+  
+  // Убираем класс для открытого состояния
+  modalElement.classList.remove('modal-open');
+  
+  // Используем короткий таймаут для анимации
+  setTimeout(() => {
+    modalElement.style.display = 'none';
+    modalOverlay.style.display = 'none';
+    isOpen = false;
+  }, 200); // Уменьшаем время с 300ms до 200ms
+};
+
+// Функция для форматирования времени крафта
+const formatCraftTime = (seconds) => {
+  if (!seconds && seconds !== 0) return 'Unknown';
+      
+  if (seconds < 60) {
+    return `${seconds} sec`;
+  } else {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return remainingSeconds > 0 
+      ? `${minutes} min ${remainingSeconds} sec` 
+      : `${minutes} min`;
+  }
+};
+
+// Get color based on item rarity
+const getRarityColor = (rarity) => {
+  const rarityLower = rarity.toLowerCase();
+  switch (rarityLower) {
+    case 'legendary':
+      return '#ff8000';
+    case 'epic':
+      return '#a335ee';
+    case 'rare':
+      return '#0070dd';
+    case 'uncommon':
+      return '#1eff00';
+    case 'common':
+    default:
+      return '#aaaaaa'; // Более темный серый для текста Common
+  }
+};
+
+// Get text color for rarity badge
+const getRarityTextColor = (rarity) => {
+  const rarityLower = rarity.toLowerCase();
+  switch (rarityLower) {
+    case 'legendary':
+    case 'epic':
+    case 'rare':
+      return '#ffffff'; // Белый текст для темных фонов
+    case 'uncommon':
+    case 'common':
+    default:
+      return '#000000'; // Черный текст для светлых фонов
+  }
+};
+
+// Get glow color based on item rarity
+const getRarityGlowColor = (rarity) => {
+  const rarityLower = rarity.toLowerCase();
+  switch (rarityLower) {
+    case 'legendary':
+      return 'rgba(255, 128, 0, 0.6)';
+    case 'epic':
+      return 'rgba(163, 53, 238, 0.6)';
+    case 'rare':
+      return 'rgba(0, 112, 221, 0.6)';
+    case 'uncommon':
+      return 'rgba(30, 255, 0, 0.6)';
+    case 'common':
+    default:
+      return 'rgba(255, 255, 255, 0.3)';
+  }
+};
+
+// Setup rarity animation
+const setupRarityAnimation = (rarity, rarityColor, rarityGlowColor) => {
+  const rarityLower = rarity.toLowerCase();
+  
+  // Устанавливаем стиль для модального окна в зависимости от редкости
+  if (modalElement) {
+    // Для common используем серые рамки с тонким свечением
+    if (rarityLower === 'common') {
+      modalElement.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.3)';
+      modalElement.style.border = '1px solid rgba(0, 255, 255, 0.4)';
+      modalElement.style.borderTop = '2px solid #00fff7';
+      modalElement.style.borderBottom = '2px solid #00fff7';
+    } 
+    // Для uncommon и выше используем цвета редкости с футуристическим стилем
+    else {
+      modalElement.style.boxShadow = `0 0 20px ${rarityGlowColor}, 0 0 30px rgba(0, 255, 255, 0.3)`;
+      modalElement.style.border = `1px solid ${rarityColor}`;
+      modalElement.style.borderTop = '2px solid #00fff7';
+      modalElement.style.borderBottom = '2px solid #00fff7';
+    }
+  }
+};
+
+// Show item details modal function
+const showItemDetailsModal = async (itemId, fromRecipe = false, recipeData = null, additionalInfo = null) => {
+  try {
+    // Initialize modal
+    initializeModal();
+    
+    // Check if modal and content were created
+    if (!modalElement || !modalContent) {
+      return;
+    }
+    
+    // Проверяем, является ли предмет экипированным
+    const isEquipped = additionalInfo && additionalInfo.isEquipped === true;
+    const equipmentSlot = isEquipped ? additionalInfo.slot : null;
+    const modalSource = additionalInfo && additionalInfo.source ? additionalInfo.source : 'inventory';
+    const fromCharacterScreen = additionalInfo && additionalInfo.fromCharacterScreen === true;
+    
+    // Сохраняем информацию об источнике вызова модального окна
+    window.lastModalSource = modalSource;
+    
+    // Дополнительная проверка экипированного предмета на основе источника модального окна
+    const isFromEquipment = modalSource === 'equipment';
+    const isItemEquipped = isEquipped || isFromEquipment || fromCharacterScreen;
+    const equipSlot = equipmentSlot || (additionalInfo && additionalInfo.slot) || null;
+    
+    console.log(`[ModalModule] Item modal: isEquipped=${isEquipped}, isFromEquipment=${isFromEquipment}, fromCharacterScreen=${fromCharacterScreen}, finalCheck=${isItemEquipped}, slot=${equipSlot}`);
+    
+    // Загружаем данные о инвентаре из IndexedDB
+    let userInventory = [];
+    if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function') {
+      try {
+        userInventory = await window.IndexedDBModule.getInventoryItems();
+        
+      } catch (error) {
+        // Ошибка при получении предметов из IndexedDB
+        userInventory = [];
+      }
+    } else {
+      // IndexedDBModule.getInventoryItems не найден
+      userInventory = [];
+    }
+    
+    // Преобразуем массив предметов в объект для удобства
+    const userResources = {};
+    let itemQuantity = 0;
+    userInventory.forEach(item => {
+      if (item && item.id) {
+        userResources[item.id] = item.quantity || 0;
+        if (item.id === itemId) {
+          itemQuantity = item.quantity || 0;
+        }
+      }
+    });
+    
+    // Проверяем источник вызова модального окна
+    const source = window.lastModalSource || 'unknown';
+    console.log(`[ModalModule] Источник вызова модального окна: ${source}, fromRecipe: ${fromRecipe}`);
+    
+    // Получаем информацию о предмете из ItemCatalogModule
+    let itemDetails = null;
+    
+    // Новый метод получения информации о предмете из fallbackItems
+    if (window.ItemCatalogModule && typeof window.ItemCatalogModule.findCatalogItemById === 'function') {
+      // Проверяем, что каталог предметов готов к использованию
+      if (typeof window.ItemCatalogModule.isItemCatalogReady === 'function') {
+        const isReady = window.ItemCatalogModule.isItemCatalogReady();
+        if (!isReady) {
+          if (typeof window.ItemCatalogModule.waitForItemCatalog === 'function') {
+            await window.ItemCatalogModule.waitForItemCatalog();
+          } else {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+      }
+      
+      // Пытаемся найти предмет по ID в каталоге предметов
+      try {
+        itemDetails = window.ItemCatalogModule.findCatalogItemById(itemId);
+        console.log(`[ModalModule] Найден предмет в каталоге ItemCatalogModule:`, itemDetails);
+      } catch (catalogError) {
+        console.warn(`[ModalModule] Ошибка при поиске предмета в ItemCatalogModule:`, catalogError);
+      }
+    } else if (window.ItemCatalogModule && typeof window.ItemCatalogModule.getItemFromIndexedDB === 'function') {
+      // Старый метод получения информации о предмете
+      try {
+        // Проверяем, что каталог предметов готов к использованию
+        if (typeof window.ItemCatalogModule.isReady === 'function') {
+          const isReady = window.ItemCatalogModule.isReady();
+          if (!isReady) {
+            if (typeof window.ItemCatalogModule.waitUntilReady === 'function') {
+              await window.ItemCatalogModule.waitUntilReady();
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
+          }
+        }
+        itemDetails = await window.ItemCatalogModule.getItemFromIndexedDB(itemId);
+      } catch (indexedDBError) {
+        console.warn(`[ModalModule] Ошибка при получении предмета из IndexedDB:`, indexedDBError);
+      }
+    }
+    
+    // Проверяем наличие рецепта в CraftingRecipes
+    let recipeData = recipeData || null;
+    if (!recipeData && window.CraftingRecipes && typeof window.CraftingRecipes.getRecipeById === 'function') {
+      recipeData = window.CraftingRecipes.getRecipeById(itemId);
+    }
+    
+    // Проверка, является ли это рецептом
+    // 1. Если явно указан параметр fromRecipe = true, то это рецепт
+    // 2. Если в window.lastModalSource указано 'crafting', то это рецепт
+    // 3. Если передан recipeData, то это рецепт
+    const isSourceCrafting = source === 'crafting';
+    
+    // НОВАЯ ЛОГИКА: Проверяем, открыт ли предмет из контейнеров рецептов
+    // Определяем, вызвано ли модальное окно из одного из разрешенных контейнеров рецептов
+    let isRecipeContainer = source === 'crafting' || source === 'campfire' || source === 'furnace';
+    
+    // Проверяем источник вызова на основе дополнительных данных
+    if (additionalInfo && additionalInfo.source) {
+      if (['campfire-recipes', 'furnace-recipes', 'compact-recipes-container'].includes(additionalInfo.source)) {
+        console.log(`[ModalModule] Предмет открыт из контейнера рецептов: ${additionalInfo.source}`);
+        isRecipeContainer = true;
+      }
+    }
+    
+    // Определяем, является ли предмет рецептом только если он вызван из одного из контейнеров рецептов
+    // или если у нас уже есть явно переданные данные о рецепте
+    const isRecipe = (isRecipeContainer && !!recipeData) || fromRecipe;
+    
+    // Дополнительная проверка для предметов из инвентаря - они никогда не должны отображаться как рецепты
+    const isFromInventory = source === 'inventory';
+    const forceAsItem = isFromInventory && itemDetails;
+    
+    // Логируем решение для диагностики
+    console.log(`[ModalModule] Решение о типе предмета: isRecipe=${isRecipe}, forceAsItem=${forceAsItem}, source=${source}`);
+    
+    if (!itemDetails && !recipeData) {
+      // Создаем базовую информацию о предмете
+      itemDetails = {
+        item_id: itemId,
+        name: itemId.charAt(0).toUpperCase() + itemId.slice(1).replace(/_/g, ' '),
+        description: `No description available for ${itemId}`,
+        type: 'Resource',
+        rarity: 'Common',
+        value: 0
+      };
+    }
+    
+    // Объединяем данные предмета и рецепта, приоритет отдаем свойствам из рецепта
+    // Но если мы принудительно отображаем как предмет, то не используем данные рецепта
+    const combinedItemData = forceAsItem ? 
+      { ...itemDetails, item_id: itemId, id: itemId } : 
+      {
+        ...(itemDetails || {}),
+        ...(recipeData || {}),
+        item_id: itemId,
+        id: itemId,
+        name: (recipeData && recipeData.name) || (itemDetails && itemDetails.name) || itemId,
+        description: (recipeData && recipeData.description) || (itemDetails && itemDetails.description) || '',
+        type: (recipeData && recipeData.type) || (itemDetails && itemDetails.type) || 'Resource',
+        rarity: (recipeData && recipeData.rarity) || (itemDetails && itemDetails.rarity) || 'Common',
+        properties: (recipeData && recipeData.properties) || (itemDetails && itemDetails.properties) || '',
+        value: (recipeData && recipeData.value) || (itemDetails && itemDetails.value) || 0
+      };
+    
+    // Определяем цвета в зависимости от редкости предмета
+    const rarity = combinedItemData.rarity || 'Common';
+    const rarityColor = getRarityColor(rarity);
+    const rarityGlowColor = getRarityGlowColor(rarity);
+    
+    // Стилизуем модальное окно в зависимости от редкости
+    setupRarityAnimation(rarity, rarityColor, rarityGlowColor);
+    
+    // Если это рецепт, делаем модальное окно шире
+    if (isRecipe && !forceAsItem && modalElement) {
+      modalElement.style.maxWidth = '80%';
+      modalElement.style.width = '80%';
+    } else if (modalElement) {
+      modalElement.style.maxWidth = '500px';
+      modalElement.style.width = 'auto';
+    }
+    
+    // Формируем HTML для отображения предмета
+    let contentHTML = '';
+    
+    if (isRecipe && !forceAsItem && recipeData && recipeData.materials) {
+      // Для рецептов отображаем специальный шаблон с материалами и кнопкой крафта
+      // Проверяем наличие собственного пути к изображению или используем стандартный путь
+      let imageUrl = '';
+      
+      if (recipeData.imageSrc) {
+        // Если есть прямой путь в рецепте, используем его
+        imageUrl = recipeData.imageSrc;
+      } else if (itemDetails && itemDetails.image_path) {
+        // Если есть путь в деталях предмета, используем его
+        imageUrl = itemDetails.image_path;
+      } else {
+        // Создаем путь по ID предмета с учетом специальных случаев
+        if (itemId.toLowerCase() === 'ironore' || itemId.toLowerCase() === 'iron ore' || itemId.toLowerCase() === 'iron_ore') {
+          imageUrl = 'images/rpg/ironore.png';
+        } else if (itemId.toLowerCase() === 'ironingot') {
+          imageUrl = 'images/rpg/ironingot.png';
+        } else if (itemId.toLowerCase() === 'rope') {
+          imageUrl = 'images/rpg/rope.png';
+        } else if (itemId.toLowerCase() === 'crushedrock' || itemId.toLowerCase() === 'crushed rock' || itemId.toLowerCase() === 'crushed_rock') {
+          imageUrl = 'images/rpg/crushedrock.png';
+        } else if (itemId.toLowerCase() === 'primarrows' || itemId.toLowerCase() === 'primitive arrows') {
+          imageUrl = 'images/rpg/primarrows.png';
+        } else if (itemId.toLowerCase() === 'stick') {
+          imageUrl = 'images/rpg/stick.png';
+        } else {
+          imageUrl = `images/rpg/${itemId.toLowerCase().replace(/\s+/g, '_')}.png`;
+        }
+      }
+      
+      // Проверяем возможность крафта - передаем прямо объект materials из рецепта
+      const canCraftItem = await canCraft(recipeData.materials);
+      
+      console.log('[ModalModule] Результат проверки возможности крафта:', canCraftItem);
+      
+      // Преобразуем формат материалов из объекта {material: amount} в массив объектов [{material, amount}]
+      const materialsArray = Object.entries(recipeData.materials).map(([material, amount]) => ({
+        material,
+        amount
+      }));
+      
+      // Определяем цвет текста для бейджа редкости
+      const rarityTextColor = getRarityTextColor(rarity);
+      
+      // Вычисляем максимальное количество крафта
+      const maxCraftAmount = getMaxCraftAmount(recipeData.materials, userResources);
+      
+      // --- ВСТАВКА: HTML с выбором количества и кнопкой MAX ---
+      contentHTML = `
+        <div class="item-details-container" style="display: flex; flex-direction: column; width: 100%;">
+          <div class="item-header" style="display: flex; flex-wrap: wrap; margin-bottom: 15px;">
+            <div class="item-image-container" style="background: rgba(0, 0, 40, 0.6); border: 2px solid ${rarityColor}; box-shadow: 0 0 15px ${rarityGlowColor}; position: relative; width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 12px;">
+              <img class="item-image" src="${imageUrl}" 
+                  onerror="this.onerror=null; this.src='images/rpg/unknown.png?v=${Date.now()}';" style="max-width: 90%; max-height: 90%;">
+          </div>
+            <div class="item-title-area" style="margin-left: 15px; flex: 1;">
+              <h2 class="item-name" style="color: ${rarityColor}; margin-top: 0; margin-bottom: 5px; font-size: 20px;">
+                ${recipeData.name || 'Unknown Recipe'}
+            </h2>
+              <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                <span style="background-color: ${rarityColor}20; font-size: 12px; padding: 3px 8px; border-radius: 3px; color: ${rarityColor}; font-weight: bold; border: 1px solid ${rarityColor}80;">${rarity}</span>
+                <span style="margin-left: 10px; font-size: 14px; color: #fff;">${recipeData.category ? recipeData.category.charAt(0).toUpperCase() + recipeData.category.slice(1) : 'Craft'}</span>
+                    </div>
+                    </div>
+                    <div style="font-size: 14px; line-height: 1.5; color: #fff;">${recipeData.description || ''}</div>
+              </div>
+          <div style="height: 2px; width: 100%; margin: 0 0 15px 0; background: linear-gradient(to right, ${rarityColor}, transparent);"></div>
+          <div class="item-properties" style="display: flex; flex-wrap: wrap; gap: 5px;">
+            ${recipeData.difficulty ? `<div style="padding: 5px 8px; background: rgba(0, 0, 40, 0.4); border-radius: 5px; border: 1px solid rgba(0, 255, 255, 0.2); flex: 1; min-width: 100px;"><span style="color: #ddd; font-size: 13px;">Difficulty:</span> <span style="font-weight: bold; float: right; color: #fff; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5); font-size: 13px;">${recipeData.difficulty}</span></div>` : ''}
+            ${recipeData.craftTime ? `<div style="padding: 5px 8px; background: rgba(0, 0, 40, 0.4); border-radius: 5px; border: 1px solid rgba(0, 255, 255, 0.2); flex: 1; min-width: 100px;"><span style="color: #ddd; font-size: 13px;">Craft Time:</span> <span style="font-weight: bold; float: right; color: #fff; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5); font-size: 13px;">${formatCraftTime(recipeData.craftTime)}</span></div>` : ''}
+            ${recipeData.unlockLevel ? `<div style="padding: 5px 8px; background: rgba(0, 0, 40, 0.4); border-radius: 5px; border: 1px solid rgba(0, 255, 255, 0.2); flex: 1; min-width: 100px;"><span style="color: #ddd; font-size: 13px;">Level:</span> <span style="font-weight: bold; float: right; color: #fff; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5); font-size: 13px;">${recipeData.unlockLevel}</span></div>` : ''}
+            ${recipeData.value ? `<div style="padding: 5px 8px; background: rgba(0, 0, 40, 0.4); border-radius: 5px; border: 1px solid rgba(0, 255, 255, 0.2); flex: 1; min-width: 100px;"><span style="color: #ddd; font-size: 13px;">Onion:</span> <span style="font-weight: bold; float: right; color: #fff; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5); font-size: 13px;">${recipeData.value} <img src="images/rpg/onion.png" style="width: 14px; height: 14px; vertical-align: middle;"></span></div>` : ''}
+          </div>
+          <div class="materials-and-crafting" style="display: flex; flex-direction: column; gap: 8px;">
+              <div class="required-materials" style="background: linear-gradient(135deg, rgba(0,255,255,0.05) 0%, rgba(0,0,40,0.4) 100%); padding: 6px; border-radius: 8px; border: 1px solid rgba(0,255,255,0.2);">
+              <h3 style="font-size: 13px; margin: 0 0 6px 0; color: #00fff7; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5); border-bottom: 1px solid rgba(0,255,255,0.3); padding-bottom: 4px;">Required Materials</h3>
+              <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;">
+                ${Object.entries(recipeData.materials).map(([material, amount]) => {
+                  let userAmount = 0;
+                  let foundResourceKey = null;
+                  const materialLower = material.toLowerCase();
+                  const materialNoSpaces = materialLower.replace(/\s+/g, '');
+                  const materialWithUnderscore = materialLower.replace(/\s+/g, '_');
+                  const materialCapitalized = materialLower.charAt(0).toUpperCase() + materialLower.slice(1);
+                  const materialProper = material.charAt(0).toUpperCase() + material.slice(1).toLowerCase();
+                  const materialProperNoSpaces = materialProper.replace(/\s+/g, '');
+                  
+                  console.log(`[ModalModule] Ищем материал: ${material}, варианты: ${materialLower}, ${materialNoSpaces}, ${materialWithUnderscore}`);
+                  
+                  // Специальная обработка для ironore -> Iron Ore
+                  let displayName = materialProper;
+                  if (material === 'ironore' || materialLower === 'ironore' || material === 'Iron Ore' || materialLower === 'iron ore') {
+                    // Проверяем наличие ресурса 'Iron Ore' во всех возможных вариантах
+                    const ironOreVariants = ['ironore', 'Iron Ore', 'iron ore', 'Iron_Ore', 'iron_ore', 'IronOre', 'IRONORE', 'IRON_ORE', 'IRON ORE'];
+                    for (const variant of ironOreVariants) {
+                      if (userResources[variant] !== undefined) {
+                        userAmount = userResources[variant];
+                        foundResourceKey = variant;
+                        displayName = 'Iron Ore';
+                        console.log(`[ModalModule] Найден ресурс Iron Ore в варианте ${variant}, количество: ${userAmount}`);
+                        break;
+                      }
+                    }
+                  }
+                  
+                  // Если ресурс не найден как Iron Ore, продолжаем стандартные проверки
+                  if (foundResourceKey === null) {
+                    if (userResources[materialProper] !== undefined) {
+                      userAmount = userResources[materialProper];
+                      foundResourceKey = materialProper;
+                      console.log(`[ModalModule] Найден ключ ${materialProper} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else if (userResources[material] !== undefined) {
+                      userAmount = userResources[material];
+                      foundResourceKey = material;
+                      console.log(`[ModalModule] Найден ключ ${material} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else if (userResources[materialLower] !== undefined) {
+                      userAmount = userResources[materialLower];
+                      foundResourceKey = materialLower;
+                      console.log(`[ModalModule] Найден ключ ${materialLower} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else if (userResources[materialCapitalized] !== undefined) {
+                      userAmount = userResources[materialCapitalized];
+                      foundResourceKey = materialCapitalized;
+                      console.log(`[ModalModule] Найден ключ ${materialCapitalized} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else if (userResources[materialNoSpaces] !== undefined) {
+                      userAmount = userResources[materialNoSpaces];
+                      foundResourceKey = materialNoSpaces;
+                      console.log(`[ModalModule] Найден ключ ${materialNoSpaces} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else if (userResources[materialWithUnderscore] !== undefined) {
+                      userAmount = userResources[materialWithUnderscore];
+                      foundResourceKey = materialWithUnderscore;
+                      console.log(`[ModalModule] Найден ключ ${materialWithUnderscore} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else if (userResources[materialProperNoSpaces] !== undefined) {
+                      userAmount = userResources[materialProperNoSpaces];
+                      foundResourceKey = materialProperNoSpaces;
+                      console.log(`[ModalModule] Найден ключ ${materialProperNoSpaces} для материала ${material}, количество: ${userAmount}`);
+                    }
+                    else {
+                      console.log(`[ModalModule] Ресурс ${material} НЕ НАЙДЕН! Доступные ключи:`, Object.keys(userResources).filter(k => k.toLowerCase().includes('iron') || k.toLowerCase().includes('ore')));
+                    }
+                  }
+                  if (materialLower === 'woodlog' && userAmount === 0) {
+                    const woodlogVariants = ['Woodlog', 'WoodLog', 'Wood Log', 'Wood', 'Log', 'Logs', 'Wood_Log'];
+                    for (const variant of woodlogVariants) {
+                      if (userResources[variant] !== undefined) {
+                        userAmount = userResources[variant];
+                        foundResourceKey = variant;
+                        break;
+                      }
+                    }
+                  }
+                  if (materialLower === 'rock' && userAmount === 0) {
+                    const variants = ['Rock', 'Rocks', 'Stone', 'Stones'];
+                    for (const variant of variants) {
+                      if (userResources[variant] !== undefined) {
+                        userAmount = userResources[variant];
+                        foundResourceKey = variant;
+                        break;
+                      }
+                    }
+                  }
+                  if (materialLower === 'fiber' && userAmount === 0) {
+                    const variants = ['Fiber', 'Plant Fiber', 'PlantFiber', 'Plant_Fiber'];
+                    for (const variant of variants) {
+                      if (userResources[variant] !== undefined) {
+                        userAmount = userResources[variant];
+                        foundResourceKey = variant;
+                        break;
+                      }
+                    }
+                  }
+                  const hasEnough = userAmount >= amount;
+                  // Определяем путь к изображению материала с учетом специальных случаев
+                  let materialIcon = '';
+                  if (materialLower === 'ironore' || materialLower === 'iron ore' || materialLower === 'iron_ore') {
+                    materialIcon = 'images/rpg/ironore.png';
+                  } else if (materialLower === 'ironingot') {
+                    materialIcon = 'images/rpg/ironingot.png';
+                  } else if (materialLower === 'rope') {
+                    materialIcon = 'images/rpg/rope.png';
+                  } else if (materialLower === 'crushedrock' || materialLower === 'crushed rock' || materialLower === 'crushed_rock') {
+                    materialIcon = 'images/rpg/crushedrock.png';
+                  } else if (materialLower === 'primarrows' || materialLower === 'primitive arrows') {
+                    materialIcon = 'images/rpg/primarrows.png';
+                  } else if (materialLower === 'stick') {
+                    materialIcon = 'images/rpg/stick.png';
+                  } else {
+                    materialIcon = `images/rpg/${materialLower.replace(/\s+/g, '_')}.png`;
+                  }
+                  return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px; background: ${hasEnough ? 'rgba(92,255,92,0.1)' : 'rgba(255,92,92,0.1)'}; border-radius: 4px; ${hasEnough ? 'border: 1px solid rgba(92,255,92,0.3)' : 'border: 1px solid rgba(255,92,92,0.3)'}; margin: 0;">
+                      <div style="display: flex; align-items: center; overflow: hidden;">
+                        <img src="${materialIcon}" onerror="this.onerror=null; this.src='images/rpg/unknown.png';" style="width: 16px; height: 16px; margin-right: 4px; flex-shrink: 0;">
+                        <span style="color: #fff; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${material === 'ironore' ? 'Iron Ore' : material.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase())}</span>
+                      </div>
+                      <div style="white-space: nowrap; flex-shrink: 0; margin-left: 4px;">
+                        <span style="color: ${hasEnough ? '#5cff5c' : '#ff5c5c'}; font-weight: bold; font-size: 12px;">${userAmount}</span>
+                        <span style="color: #fff; opacity: 0.7; font-size: 12px;">/</span>
+                        <span style="color: #fff; font-size: 12px;">${amount}</span>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+              </div>
+            <div class="craft-controls-row" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin: 6px 0 0 0; background: linear-gradient(135deg, rgba(0,255,255,0.18) 0%, rgba(0,0,40,0.8) 100%); border-radius: 10px; padding: 6px; border: 1px solid rgba(0,255,255,0.35); box-shadow: 0 0 10px 2px rgba(0,255,255,0.33), 0 0 2px 0 #fff;">
+              <input id="craft-amount-input" type="number" min="1" max="${maxCraftAmount}" value="1" style="width: 40px; font-size: 14px; padding: 2px 4px; border-radius: 4px; background: rgba(0,0,40,0.6); color: #00fff7; border: 1.5px solid #00fff7; text-align: center; margin: 0; box-shadow: 0 0 8px rgba(0,255,255,0.33);" />
+              <button id="craft-max-btn" style="background: linear-gradient(90deg, rgba(0,255,255,0.25) 0%, rgba(0,255,255,0.12) 100%); color: #00fff7; border: 1.5px solid #00fff7; border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer; min-width: 32px; box-shadow: 0 0 8px rgba(0,255,255,0.33);">MAX</button>
+              <button 
+                id="craft-btn"
+                style="background: linear-gradient(90deg, rgba(0,255,255,0.25) 0%, rgba(0,255,255,0.12) 100%); color: #00fff7; border: 2px solid #00fff7; border-radius: 12px; margin-left: 10px; font-weight: bold; font-size: 1rem; letter-spacing: 1px; box-shadow: 0 0 12px 2px rgba(0,255,255,0.53); padding: 6px 20px; margin: 0; cursor: ${canCraftItem ? 'pointer' : 'not-allowed'}; min-width: 120px; ${!canCraftItem ? 'opacity: 0.5;' : ''}"
+                ${canCraftItem ? '' : 'disabled'}
+              >Craft</button>
+            </div>
+            <div id="craft-result" style="margin-top: 15px; min-height: 20px; font-size: 15px; text-align: center; color: #00fff7; text-shadow: 0 0 5px #00fff7, 0 0 1px #fff;"></div>
+          </div>
+        </div>
+      `;
+      // ... существующий код ...
+      // После вставки HTML — добавляем обработчики для поля количества и кнопки MAX
+      setTimeout(() => {
+        const input = document.getElementById('craft-amount-input');
+        const maxBtn = document.getElementById('craft-max-btn');
+        const craftBtn = document.getElementById('craft-btn');
+        if (input && maxBtn) {
+          maxBtn.onclick = () => {
+            input.value = maxCraftAmount;
+            input.dispatchEvent(new Event('input'));
+          };
+        }
+        if (input && craftBtn) {
+          input.oninput = () => {
+            let val = parseInt(input.value) || 1;
+            if (val < 1) val = 1;
+            if (val > maxCraftAmount) val = maxCraftAmount;
+            input.value = val;
+            // Пересчитываем доступность кнопки
+            if (val > 0 && val <= maxCraftAmount) {
+              craftBtn.disabled = false;
+              craftBtn.style.background = 'linear-gradient(90deg, rgba(0,255,255,0.25) 0%, rgba(0,255,255,0.12) 100%)';
+              craftBtn.style.color = '#00fff7';
+              craftBtn.style.borderColor = '#00fff7';
+              craftBtn.style.cursor = 'pointer';
+              craftBtn.style.boxShadow = '0 0 16px 2px rgba(0,255,255,0.53), 0 0 2px 0 #fff';
+              craftBtn.style.textShadow = '0 0 8px #00fff7, 0 0 2px #fff';
+              craftBtn.style.opacity = '1';
+              craftBtn.textContent = 'Craft';
+            } else {
+              craftBtn.disabled = true;
+              craftBtn.style.background = 'linear-gradient(90deg, rgba(0,255,255,0.1) 0%, rgba(0,0,40,0.5) 100%)';
+              craftBtn.style.color = 'rgba(0,255,255,0.4)';
+              craftBtn.style.borderColor = 'rgba(0, 255, 255, 0.2)';
+              craftBtn.style.cursor = 'not-allowed';
+              craftBtn.style.boxShadow = '0 0 8px rgba(0,255,255,0.2)';
+              craftBtn.style.textShadow = 'none';
+              craftBtn.style.opacity = '0.5';
+              craftBtn.textContent = 'Not Enough Materials';
+            }
+          };
+        }
+        if (craftBtn && input) {
+          craftBtn.onclick = () => {
+            const qty = parseInt(input.value) || 1;
+            if (window.ModalModule && typeof window.ModalModule.craftAndUpdateInventory === 'function') {
+              window.ModalModule.craftAndUpdateInventory(itemId, qty);
+            } else if (window.InventoryModule && typeof window.InventoryModule.craftItemAndCloseModal === 'function') {
+              window.InventoryModule.craftItemAndCloseModal(itemId, qty);
+            } else if (window.craftItemFromModal) {
+              window.craftItemFromModal(itemId, qty);
+            }
+          };
+        }
+      }, 50);
+    } else {
+      // Для обычных предметов отображаем стандартный шаблон
+      // Проверяем наличие собственного пути к изображению или используем стандартный путь
+      let imageUrl = '';
+      
+      if (itemDetails && itemDetails.image_path) {
+        // Если есть путь в деталях предмета, используем его
+        imageUrl = itemDetails.image_path;
+      } else {
+        // Создаем путь по ID предмета
+        // Для железной руды (ironore) используем специальное имя файла
+        if (itemId.toLowerCase() === 'ironore' || itemId.toLowerCase() === 'iron ore' || itemId.toLowerCase() === 'iron_ore') {
+          imageUrl = 'images/rpg/ironore.png';
+        } else if (itemId.toLowerCase() === 'ironingot') {
+          imageUrl = 'images/rpg/ironingot.png';
+        } else {
+          imageUrl = `images/rpg/${itemId.toLowerCase().replace(/\s+/g, '_')}.png`;
+        }
+      }
+      
+      // Определяем цвет текста для бейджа редкости
+      const rarityTextColor = getRarityTextColor(rarity);
+      
+      // Получаем текущее количество предмета у пользователя
+      let itemQuantity = 0;
+      if (userResources && userResources[itemId] !== undefined) {
+        itemQuantity = userResources[itemId];
+      } else {
+        // Проверяем другие возможные ключи
+        const normalizedId = itemId.toLowerCase();
+        const idWithUnderscore = normalizedId.replace(/\s+/g, '_');
+        const idNoSpaces = normalizedId.replace(/\s+/g, '');
+        const capitalizedId = itemId.charAt(0).toUpperCase() + itemId.slice(1);
+        
+        if (userResources[normalizedId] !== undefined) itemQuantity = userResources[normalizedId];
+        else if (userResources[idWithUnderscore] !== undefined) itemQuantity = userResources[idWithUnderscore];
+        else if (userResources[idNoSpaces] !== undefined) itemQuantity = userResources[idNoSpaces];
+        else if (userResources[capitalizedId] !== undefined) itemQuantity = userResources[capitalizedId];
+        
+        // Специальная проверка для типичных предметов
+        if (normalizedId === 'woodlog' || normalizedId === 'wood_log' || normalizedId === 'wood log') {
+          const woodVariants = ['Wood', 'Log', 'Wood Log', 'Woodlog'];
+          for (const variant of woodVariants) {
+            if (userResources[variant] !== undefined) {
+              itemQuantity = userResources[variant];
+              break;
+            }
+          }
+        }
+      }
+      
+      // Если предмет экипирован, он может быть не в инвентаре, но мы всё равно должны показать кнопку Unequip
+      const showUnequipButton = isItemEquipped;
+      
+      // Для кнопки экипировки нужно, чтобы предмет был в инвентаре (itemQuantity > 0)
+      const canEquip = itemQuantity > 0 && 
+                       window.lastModalSource === 'inventory' && 
+                       window.activeRPGPage === 'character' && 
+                       !isResourceItem(itemId) && 
+                       isEquippableItem(itemId, combinedItemData.type);
+      
+      console.log(`[ModalModule] Item quantities: ${itemId}=${itemQuantity}, canEquip=${canEquip}, showUnequip=${showUnequipButton}`);
+      
+      contentHTML = `
+        <div class="item-details-container" style="display: flex; flex-direction: column; width: 100%;">
+          <div class="item-header" style="display: flex; flex-wrap: wrap; margin-bottom: 15px;">
+            <div class="item-image-container" style="background: rgba(0, 0, 40, 0.6); border: 2px solid ${rarityColor}; box-shadow: 0 0 15px ${rarityGlowColor}; position: relative; width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 12px;">
+              <img class="item-image" src="${imageUrl}" 
+                  onerror="this.onerror=null; this.src='images/rpg/unknown.png?v=${Date.now()}';" style="max-width: 90%; max-height: 90%;">
+          </div>
+            <div class="item-title-area" style="margin-left: 15px; flex: 1;">
+              <h2 class="item-name" style="color: ${rarityColor}; margin-top: 0; margin-bottom: 5px; font-size: 20px;">
+                ${combinedItemData.name || 'Unknown Item'}
+              </h2>
+              <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                <span style="background-color: ${rarityColor}20; font-size: 12px; padding: 3px 8px; border-radius: 3px; color: ${rarityColor}; font-weight: bold; border: 1px solid ${rarityColor}80;">${rarity}</span>
+                <span style="margin-left: 10px; font-size: 14px; color: #ddd;">${combinedItemData.type || 'Resource'}</span>
+              </div>
+            </div>
+          </div>
+          
+          <div style="height: 2px; width: 100%; margin: 0 0 15px 0; background: linear-gradient(to right, ${rarityColor}, transparent);"></div>
+          
+          <div style="font-size: 14px; line-height: 1.5; color: #fff; margin-bottom: 15px;">
+            ${combinedItemData.description || 'No description available'}
+          </div>
+          
+          <div class="item-properties" style="display: flex; flex-wrap: wrap; gap: 5px;">
+            ${combinedItemData.properties ? `<div style="padding: 5px 8px; background: rgba(0, 0, 40, 0.4); border-radius: 5px; border: 1px solid rgba(0, 255, 255, 0.2); flex: 1;"><span style="color: #ddd; font-size: 13px;">Properties:</span> <span style="float: right; color: #8aff8a; font-size: 13px;">${combinedItemData.properties}</span></div>` : ''}
+            ${combinedItemData.value ? `<div style="padding: 5px 8px; background: rgba(0, 0, 40, 0.4); border-radius: 5px; border: 1px solid rgba(0, 255, 255, 0.2); flex: 1; min-width: 100px;"><span style="color: #ddd; font-size: 13px;">Onion:</span> <span style="font-weight: bold; float: right; color: #fff; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5); font-size: 13px;">${combinedItemData.value} <img src="images/rpg/onion.png" style="width: 14px; height: 14px; vertical-align: middle;"></span></div>` : ''}
+          </div>
+          
+          ${itemQuantity > 0 || showUnequipButton ? `
+          <div style="text-align: center; padding: 10px; margin-top: auto;">
+            ${showUnequipButton ? 
+              `<button id="unequip-btn" class="modal-button" style="background: linear-gradient(90deg, rgba(255,80,80,0.25) 0%, rgba(255,80,80,0.12) 100%); color: #ff5050; border: 2px solid #ff5050; box-shadow: 0 0 16px 2px rgba(255,80,80,0.33), 0 0 2px 0 #fff; text-shadow: 0 0 8px #ff5050, 0 0 2px #fff; border-radius: 16px; font-weight: bold; font-size: 1.1rem; letter-spacing: 1px; padding: 8px 24px; cursor: pointer; transition: background 0.2s, color 0.2s;">Unequip</button>` : 
+              `<button id="equip-btn" class="modal-button" style="display: ${canEquip ? 'inline-block' : 'none'}; background: linear-gradient(90deg, rgba(0,255,255,0.25) 0%, rgba(0,255,255,0.12) 100%); color: #00fff7; border: 2px solid #00fff7; border-radius: 16px; font-weight: bold; font-size: 1.1rem; letter-spacing: 1px; box-shadow: 0 0 16px 2px rgba(0,255,255,0.53), 0 0 2px 0 #fff; text-shadow: 0 0 8px #00fff7, 0 0 2px #fff; padding: 8px 24px; cursor: pointer; transition: background 0.2s, color 0.2s;">Equip</button>`
+            }
+          </div>
+          ` : ''}
+        </div>
+      `;
+    }
+    
+    // Устанавливаем содержимое модального окна
+    modalContent.innerHTML = contentHTML;
+    
+    // Добавляем обработчик для кнопки Equip и Unequip
+    setTimeout(() => {
+      const equipBtn = document.getElementById('equip-btn');
+      const unequipBtn = document.getElementById('unequip-btn');
+      
+      if (equipBtn) {
+        equipBtn.onclick = async () => {
+          equipBtn.disabled = true;
+          equipBtn.style.opacity = '0.5';
+          equipBtn.style.cursor = 'not-allowed';
+          equipBtn.style.pointerEvents = 'none';
+          equipBtn.textContent = 'Equipping...';
+          
+          try {
+            // Получаем telegramId
+            const telegramId = localStorage.getItem('telegramId');
+            
+            // Определяем подходящий слот для предмета
+            let slot = getItemSlot(itemId);
+            if (!slot) {
+              console.error('No suitable slot found for item:', itemId);
+              equipBtn.textContent = 'No slot found';
+              return;
+            }
+            
+            console.log(`Equipping ${itemId} to slot ${slot}`);
+            
+            // Проверяем, есть ли уже экипированный предмет в этом слоте
+            let currentEquippedItem = null;
+            if (window.equippedItems && window.equippedItems[slot]) {
+              currentEquippedItem = window.equippedItems[slot];
+              console.log(`Current equipped item in slot ${slot}: ${currentEquippedItem}`);
+            }
+            
+            // Проверяем инвентарь, чтобы убедиться, что экипируемый предмет есть в наличии
+            let hasItem = false;
+            
+            try {
+              if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function') {
+                const inventory = await window.IndexedDBModule.getInventoryItems();
+                const item = inventory.find(i => i.id === itemId && (i.quantity > 0 || i.qty > 0));
+                hasItem = !!item;
+              }
+              
+              if (!hasItem && window.userData && window.userData.inventory && window.userData.inventory[itemId] && 
+                  window.userData.inventory[itemId].quantity > 0) {
+                hasItem = true;
+              }
+              
+              if (!hasItem && window.globalUserResources && window.globalUserResources[itemId] > 0) {
+                hasItem = true;
+              }
+              
+              if (!hasItem) {
+                console.error(`Item ${itemId} not found in inventory`);
+                equipBtn.textContent = 'Item not found';
+                equipBtn.disabled = false;
+                return;
+              }
+            } catch (invError) {
+              console.error('Error checking inventory:', invError);
+            }
+            
+            // Обязательно снимаем предыдущее оружие перед экипировкой нового
+            if (currentEquippedItem) {
+              console.log(`Unequipping current item ${currentEquippedItem} before equipping new one...`);
+              try {
+                // Сначала снимаем текущее оружие
+                const unequipResponse = await fetch('rpg.php?action=unequipItem', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ telegramId, slot, itemId: currentEquippedItem })
+                });
+                
+                const unequipData = await unequipResponse.json();
+                if (!unequipData.success) {
+                  console.warn(`Failed to unequip current item ${currentEquippedItem}:`, unequipData.message || 'Unknown error');
+                } else {
+                  console.log(`Successfully unequipped ${currentEquippedItem} from slot ${slot}`);
+                  
+                  // Добавляем снятый предмет в инвентарь
+                  try {
+                  const rpgDB = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open('rpgDatabase', 10);
+                    request.onerror = () => reject(new Error('Failed to open rpgDatabase'));
+                    request.onsuccess = () => resolve(request.result);
+                  });
+                  
+                  if (rpgDB.objectStoreNames.contains('inventory')) {
+                    const transaction = rpgDB.transaction('inventory', 'readwrite');
+                    const store = transaction.objectStore('inventory');
+                    
+                      const getEquippedRequest = store.get(currentEquippedItem);
+                      getEquippedRequest.onsuccess = function() {
+                        const equippedItem = getEquippedRequest.result;
+                        if (equippedItem) {
+                          // Предмет уже есть в инвентаре - увеличиваем количество
+                          equippedItem.quantity = (equippedItem.quantity || equippedItem.qty || 0) + 1;
+                          store.put(equippedItem);
+                          console.log(`[ModalModule] Увеличено количество ${currentEquippedItem} в rpgDatabase/inventory: ${equippedItem.quantity}`);
+                        } else {
+                          // Предмета нет в инвентаре - создаем новую запись
+                          const newItem = {
+                            id: currentEquippedItem,
+                            name: currentEquippedItem.replace(/_/g, ' '),
+                            quantity: 1,
+                            rarity: 'Common', // По умолчанию
+                            updated: new Date().toISOString()
+                          };
+                          store.put(newItem);
+                          console.log(`[ModalModule] Добавлен снятый предмет ${currentEquippedItem} в rpgDatabase/inventory`);
+                        }
+                      };
+                  }
+                  
+                    // Также обновляем через IndexedDBModule
+                  if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function') {
+                    const inventory = await window.IndexedDBModule.getInventoryItems();
+                    if (Array.isArray(inventory)) {
+                          const oldIdx = inventory.findIndex(i => i.id === currentEquippedItem);
+                          if (oldIdx !== -1) {
+                            inventory[oldIdx].quantity = (inventory[oldIdx].quantity || 0) + 1;
+                          } else {
+                            inventory.push({
+                              id: currentEquippedItem,
+                              name: currentEquippedItem.replace(/_/g, ' '),
+                              quantity: 1
+                            });
+                        }
+                        
+                        if (typeof window.IndexedDBModule.updateUserInventory === 'function') {
+                          await window.IndexedDBModule.updateUserInventory(inventory);
+                        }
+                      }
+                    }
+                    
+                    // Обновляем глобальные ресурсы
+                    if (window.globalUserResources) {
+                      if (window.globalUserResources[currentEquippedItem]) {
+                        window.globalUserResources[currentEquippedItem]++;
+                      } else {
+                        window.globalUserResources[currentEquippedItem] = 1;
+                    }
+                  }
+                } catch (dbError) {
+                    console.error('[ModalModule] Error adding unequipped item to inventory:', dbError);
+                  }
+                }
+              } catch (unequipError) {
+                console.error(`Error unequipping current item ${currentEquippedItem}:`, unequipError);
+              }
+                }
+                
+            // Теперь экипируем новый предмет
+            const response = await fetch('rpg.php?action=equipItem', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ telegramId, itemId, slot })
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+              equipBtn.textContent = 'Equipped!';
+              
+              // Обновляем данные в IndexedDB и обновляем интерфейс
+              // ------------------------------------------------------
+              try {
+                // 1. Обновляем экипированные предметы в IndexedDB
+                if (window.IndexedDBModule && typeof window.IndexedDBModule.getItems === 'function') {
+                  const items = await window.IndexedDBModule.getItems();
+                  if (items && items.equipped) {
+                    // Создаем копию объекта экипировки и добавляем новый предмет
+                    const updatedEquipment = { ...items.equipped };
+                    updatedEquipment[slot] = itemId;
+                    
+                    // Сохраняем обновленную экипировку
+                    if (window.IndexedDBModule.checkUserData) {
+                      await window.IndexedDBModule.checkUserData(telegramId, { equipped: updatedEquipment });
+                      console.log('[ModalModule] Updated equipped items in IndexedDB after equipping');
+                    }
+                  }
+                  }
+                  
+                // 2. Обновляем инвентарь: уменьшаем количество экипированного предмета
+                try {
+                  console.log(`[ModalModule] Уменьшаем количество предмета ${itemId} в инвентаре`);
+                  
+                  // 1. Сначала обновляем через IndexedDB API напрямую (основной метод)
+                  const rpgDB = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open('rpgDatabase', 10);
+                    request.onerror = () => reject(new Error('Failed to open rpgDatabase'));
+                    request.onsuccess = () => resolve(request.result);
+                  });
+                  
+                  if (rpgDB.objectStoreNames.contains('inventory')) {
+                    const transaction = rpgDB.transaction('inventory', 'readwrite');
+                    const store = transaction.objectStore('inventory');
+                    
+                    const getRequest = store.get(itemId);
+                    getRequest.onsuccess = function() {
+                      const item = getRequest.result;
+                      if (item) {
+                        const currentQuantity = item.quantity || item.qty || 1;
+                        console.log(`[ModalModule] Current quantity of ${itemId} in inventory: ${currentQuantity}`);
+                        
+                        // Уменьшаем количество
+                        item.quantity = Math.max(0, currentQuantity - 1);
+                        
+                        if (item.quantity > 0) {
+                          store.put(item);
+                          console.log(`[ModalModule] Updated quantity of ${itemId} to ${item.quantity}`);
+                    } else {
+                          store.delete(itemId);
+                          console.log(`[ModalModule] Removed ${itemId} from inventory (quantity = 0)`);
+                        }
+                      } else {
+                        console.warn(`[ModalModule] Item ${itemId} not found in rpgDatabase/inventory`);
+                      }
+                    };
+                  }
+                  
+                  // 2. Обновляем через IndexedDBModule (для совместимости с React-компонентами)
+                  if (window.IndexedDBModule) {
+                    // Метод 2.1: Через getItems/updateInventory если доступен
+                    if (typeof window.IndexedDBModule.getItems === 'function' && typeof window.IndexedDBModule.updateInventory === 'function') {
+                      const items = await window.IndexedDBModule.getItems();
+                      if (items && items.inventory && Array.isArray(items.inventory)) {
+                        const itemIndex = items.inventory.findIndex(item => item.id === itemId);
+                        if (itemIndex !== -1) {
+                          const currentQuantity = items.inventory[itemIndex].quantity || items.inventory[itemIndex].qty || 1;
+                          items.inventory[itemIndex].quantity = Math.max(0, currentQuantity - 1);
+                          
+                          // Если количество 0, удаляем предмет из массива
+                          if (items.inventory[itemIndex].quantity === 0) {
+                            items.inventory.splice(itemIndex, 1);
+                          }
+                          
+                          // Обновляем инвентарь
+                          await window.IndexedDBModule.updateInventory(items.inventory);
+                          console.log(`[ModalModule] Updated inventory through IndexedDBModule.updateInventory`);
+                        } else {
+                          console.warn(`[ModalModule] Item ${itemId} not found in IndexedDBModule inventory`);
+                        }
+                      }
+                    }
+                    
+                    // Метод 2.2: Через getInventoryItems/updateUserInventory
+                    if (typeof window.IndexedDBModule.getInventoryItems === 'function' && typeof window.IndexedDBModule.updateUserInventory === 'function') {
+                      const inventory = await window.IndexedDBModule.getInventoryItems();
+                      if (Array.isArray(inventory)) {
+                        const idx = inventory.findIndex(i => i.id === itemId);
+                        if (idx !== -1) {
+                          const currentQuantity = inventory[idx].quantity || inventory[idx].qty || 1;
+                          inventory[idx].quantity = Math.max(0, currentQuantity - 1);
+                          
+                          // Если количество 0, удаляем предмет из массива
+                          if (inventory[idx].quantity === 0) {
+                            inventory.splice(idx, 1);
+                          }
+                          
+                          await window.IndexedDBModule.updateUserInventory(inventory);
+                          console.log(`[ModalModule] Updated inventory through IndexedDBModule.updateUserInventory`);
+                        } else {
+                          console.warn(`[ModalModule] Item ${itemId} not found in inventory items`);
+                        }
+                      }
+                    }
+                  }
+                  
+                  // 3. Обновляем globalUserResources (для совместимости с некоторыми UI-компонентами)
+                  if (window.globalUserResources && window.globalUserResources[itemId]) {
+                    const currentQuantity = window.globalUserResources[itemId];
+                    window.globalUserResources[itemId] = Math.max(0, currentQuantity - 1);
+                    console.log(`[ModalModule] Updated globalUserResources: ${itemId} = ${window.globalUserResources[itemId]}`);
+                }
+                
+                  // 4. Обновляем userData.inventory если есть
+                  if (window.userData && window.userData.inventory && window.userData.inventory[itemId]) {
+                    const currentQuantity = window.userData.inventory[itemId].quantity || 1;
+                    window.userData.inventory[itemId].quantity = Math.max(0, currentQuantity - 1);
+                    console.log(`[ModalModule] Updated userData.inventory: ${itemId} = ${window.userData.inventory[itemId].quantity}`);
+                  }
+                } catch (dbError) {
+                  console.error('[ModalModule] Error updating inventory in IndexedDB:', dbError);
+                }
+                
+                // Удаляем дублирующий код обновления globalUserResources
+                // 5. Обновляем React-компоненты (главный метод обновления интерфейса)
+                if (window.InventoryModule) {
+                  if (typeof window.InventoryModule.forceUpdate === 'function') {
+                    await window.InventoryModule.forceUpdate();
+                    console.log('[ModalModule] Forced inventory component update after equipping');
+                  }
+                  
+                  // Также вызываем refreshInventoryDisplay для не-React компонентов
+                  if (typeof window.InventoryModule.refreshInventoryDisplay === 'function') {
+                    window.InventoryModule.refreshInventoryDisplay();
+                  }
+                  
+                  // Вызываем обновление отображения ресурсов
+                  if (typeof window.InventoryModule.refreshResourcesDisplay === 'function') {
+                    window.InventoryModule.refreshResourcesDisplay();
+                  }
+                }
+                
+                // 6. Отправляем события для обновления других компонентов
+                window.dispatchEvent(new CustomEvent('inventoryUpdated', { 
+                  detail: { timestamp: Date.now() } 
+                }));
+                
+                window.dispatchEvent(new CustomEvent('resourcesUpdated', { 
+                  detail: { timestamp: Date.now() } 
+                }));
+                
+                // 7. Обновляем отображение экипировки на странице персонажа
+                if (window.refreshCharacterEquipment) {
+                  window.refreshCharacterEquipment();
+                }
+                
+                // 8. Обновляем window.equippedItems
+                if (window.equippedItems) {
+                  window.equippedItems[slot] = itemId;
+                }
+                
+                // Закрываем модальное окно после успешной экипировки
+              setTimeout(() => {
+                closeModal();
+              }, 1000);
+              } catch (error) {
+                console.error('[ModalModule] Error updating UI after equipping:', error);
+                equipBtn.textContent = 'Error updating UI';
+              }
+            } else {
+                equipBtn.disabled = false;
+              equipBtn.style.opacity = '1';
+              equipBtn.style.cursor = 'pointer';
+              equipBtn.style.pointerEvents = 'auto';
+              equipBtn.textContent = data.message || 'Error equipping';
+            }
+          } catch (error) {
+            console.error('[ModalModule] Error in equip button handler:', error);
+              equipBtn.disabled = false;
+            equipBtn.style.opacity = '1';
+            equipBtn.style.cursor = 'pointer';
+            equipBtn.style.pointerEvents = 'auto';
+            equipBtn.textContent = 'Error';
+          }
+        };
+      }
+      
+      if (unequipBtn) {
+        unequipBtn.onclick = async () => {
+          unequipBtn.disabled = true;
+          unequipBtn.style.opacity = '0.5';
+          unequipBtn.style.cursor = 'not-allowed';
+          unequipBtn.style.pointerEvents = 'none';
+          
+          try {
+            // Получаем telegramId
+            const telegramId = localStorage.getItem('telegramId');
+            
+            // Используем equipSlot, который включает в себя результаты обеих проверок
+            const slotToUse = equipSlot || 'weapon1';
+            console.log(`Unequipping ${itemId} from slot ${slotToUse}`);
+            
+            const response = await fetch('rpg.php?action=unequipItem', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ telegramId, itemId, slot: slotToUse })
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+              unequipBtn.textContent = 'Unequipped!';
+              
+              // Обновляем данные в IndexedDB и обновляем интерфейс
+              // ------------------------------------------------------
+              try {
+                // 1. Обновляем экипированные предметы в IndexedDB
+                if (window.IndexedDBModule && typeof window.IndexedDBModule.getItems === 'function') {
+                  const items = await window.IndexedDBModule.getItems();
+                  if (items && items.equipped) {
+                    // Создаем копию объекта экипировки и удаляем предмет из слота
+                    const updatedEquipment = { ...items.equipped };
+                    updatedEquipment[slotToUse] = null;
+                    
+                    // Сохраняем обновленную экипировку
+                    if (window.IndexedDBModule.checkUserData) {
+                      await window.IndexedDBModule.checkUserData(telegramId, { equipped: updatedEquipment });
+                      console.log('[ModalModule] Updated equipped items in IndexedDB after unequipping');
+                    }
+                  }
+                }
+                
+                // 2. Увеличиваем количество предмета в ресурсах - для IndexedDB (resources)
+                // ИСПРАВЛЕНО: Работа только с хранилищем rpgDatabase/inventory
+                try {
+                  // Обновляем основные ресурсы в rpgDatabase/inventory
+                  const rpgDB = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open('rpgDatabase', 10);
+                    request.onerror = () => reject(new Error('Failed to open rpgDatabase'));
+                    request.onsuccess = () => resolve(request.result);
+                  });
+                  
+                  if (rpgDB.objectStoreNames.contains('inventory')) {
+                    console.log('[ModalModule] Обновляем количество предмета в rpgDatabase/inventory');
+                    
+                    const transaction = rpgDB.transaction('inventory', 'readwrite');
+                    const store = transaction.objectStore('inventory');
+                    
+                    // Поиск предмета в таблице inventory
+                    const request = store.get(itemId);
+                    
+                    request.onsuccess = function() {
+                      const item = request.result;
+                      if (item) {
+                        item.quantity = (item.quantity || 0) + 1;
+                        store.put(item);
+                        console.log(`[ModalModule] Увеличено количество ${itemId} в rpgDatabase/inventory: ${item.quantity}`);
+                      } else {
+                        // Если предмета нет в инвентаре, добавляем его
+                        const newItem = {
+                          id: itemId,
+                          name: itemId.charAt(0).toUpperCase() + itemId.slice(1).replace(/_/g, ' '),
+                          quantity: 1
+                        };
+                        store.add(newItem);
+                        console.log(`[ModalModule] Добавлен новый предмет ${itemId} в rpgDatabase/inventory`);
+                      }
+                    };
+                  }
+                  
+                  // Убрано взаимодействие с UserResourcesDB
+                  
+                  // Также обновляем через IndexedDBModule (для совместимости)
+                  if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function') {
+                    const inventory = await window.IndexedDBModule.getInventoryItems();
+                    if (Array.isArray(inventory)) {
+                      // Находим предмет в инвентаре и увеличиваем его количество
+                      const idx = inventory.findIndex(i => i.id === itemId);
+                      if (idx !== -1) {
+                        inventory[idx].quantity = (inventory[idx].quantity || 0) + 1;
+                        
+                        // Обновляем инвентарь в IndexedDB
+                        if (typeof window.IndexedDBModule.updateUserInventory === 'function') {
+                          await window.IndexedDBModule.updateUserInventory(inventory);
+                          console.log('[ModalModule] Обновлен инвентарь через IndexedDBModule');
+                        }
+                      } else {
+                        // Если предмета нет в инвентаре, добавляем его
+                        inventory.push({
+                          id: itemId,
+                          name: itemId.charAt(0).toUpperCase() + itemId.slice(1).replace(/_/g, ' '),
+                          quantity: 1
+                        });
+                        
+                        // Обновляем инвентарь в IndexedDB
+                        if (typeof window.IndexedDBModule.updateUserInventory === 'function') {
+                          await window.IndexedDBModule.updateUserInventory(inventory);
+                          console.log('[ModalModule] Добавлен новый предмет в инвентарь через IndexedDBModule');
+                        }
+                      }
+                    }
+                  }
+                } catch (dbError) {
+                  console.error('[ModalModule] Error updating resource in IndexedDB:', dbError);
+                }
+                
+                // 3. Обновляем глобальные переменные
+                if (window.globalUserResources) {
+                  if (window.globalUserResources[itemId]) {
+                    window.globalUserResources[itemId] += 1;
+                  } else {
+                    window.globalUserResources[itemId] = 1;
+                  }
+                }
+                
+                // 4. Обновляем React-компоненты (главный метод обновления интерфейса)
+                if (window.InventoryModule) {
+                  if (typeof window.InventoryModule.forceUpdate === 'function') {
+                    await window.InventoryModule.forceUpdate();
+                    console.log('[ModalModule] Forced inventory component update after unequipping');
+                  }
+                  
+                  // Также вызываем refreshInventoryDisplay для не-React компонентов
+                  if (typeof window.InventoryModule.refreshInventoryDisplay === 'function') {
+                    window.InventoryModule.refreshInventoryDisplay();
+                  }
+                  
+                  // Вызываем обновление отображения ресурсов
+                  if (typeof window.InventoryModule.refreshResourcesDisplay === 'function') {
+                    window.InventoryModule.refreshResourcesDisplay();
+                  }
+                }
+                
+                // 5. Отправляем события для обновления других компонентов
+                window.dispatchEvent(new CustomEvent('inventoryUpdated', { 
+                  detail: { timestamp: Date.now() } 
+                }));
+                
+                window.dispatchEvent(new CustomEvent('resourcesUpdated', { 
+                  detail: { timestamp: Date.now() } 
+                }));
+                
+                // 6. Обновляем отображение экипировки на странице персонажа
+                if (window.refreshCharacterEquipment) {
+                  window.refreshCharacterEquipment();
+                }
+                
+              } catch (updateError) {
+                console.error('[ModalModule] Error updating data after unequipping:', updateError);
+              }
+              // ------------------------------------------------------
+              
+              // Закрываем модальное окно через небольшую задержку
+              setTimeout(() => {
+                closeModal();
+              }, 1000);
+            } else {
+              console.error('Failed to unequip item:', data.message);
+              unequipBtn.textContent = 'Failed';
+              
+              setTimeout(() => {
+                unequipBtn.disabled = false;
+                unequipBtn.textContent = 'Unequip';
+              }, 2000);
+            }
+          } catch (error) {
+            console.error('Error unequipping item:', error);
+            unequipBtn.textContent = 'Error';
+            
+            setTimeout(() => {
+              unequipBtn.disabled = false;
+              unequipBtn.textContent = 'Unequip';
+            }, 2000);
+          }
+        };
+      }
+    }, 100);
+    
+    // Show modal
+    showModal();
+      } catch (error) {
+    // Empty catch block
+  }
+};
+
+// Функция для определения подходящего слота для предмета
+function getItemSlot(itemId) {
+  // Префикс или часть ID может использоваться для определения типа предмета
+  if (!itemId) return null;
+  
+  const id = itemId.toLowerCase();
+  
+  // Получаем информацию о предмете из каталога для проверки его типа
+  let itemType = null;
+  if (window.ItemCatalogModule && typeof window.ItemCatalogModule.findCatalogItemById === 'function') {
+    const catalogItem = window.ItemCatalogModule.findCatalogItemById(itemId);
+    if (catalogItem) {
+      itemType = catalogItem.type;
+    }
+  }
+  
+  // Если это лук, он всегда занимает первый слот оружия
+  if (id.includes('bow')) { 
+    return 'weapon1'; // Луки всегда в слот weapon1
+  }
+  
+  // Проверка на наличие лука в weapon1
+  const hasEquippedBow = window.equippedItems && window.equippedItems.weapon1 && 
+                          window.equippedItems.weapon1.toLowerCase().includes('bow');
+  
+  // Если второе оружие/щит и уже есть лук, предотвращаем экипировку
+  if ((id.includes('shield') || id.includes('offhand') || id.includes('book') || id.includes('orb')) && hasEquippedBow) {
+    console.log('Невозможно экипировать предмет во второй слот, пока экипирован лук');
+    return null; // Нельзя экипировать во второй слот, если есть лук
+  }
+  
+  // Убираем возможность экипировать стрелы
+  if (id.includes('arrow') || id.includes('bolt') || id.includes('ammo') || id.includes('ammunition')) {
+    // Стрелы больше нельзя экипировать
+    return null;
+  }
+  
+  // Проверяем, является ли предмет оружием или инструментом по типу из каталога
+  if (itemType === 'Weapon' || itemType === 'Tool') {
+    return 'weapon1'; // Оружие и инструменты идут в слот weapon1
+  }
+  
+  // Определяем тип предмета по ID (резервная логика)
+  if (id.includes('sword') || id.includes('axe') || id.includes('dagger') || id.includes('staff') || 
+      id.includes('club') || id.includes('spear') || id.includes('knife') || id.includes('pickaxe')) {
+    return 'weapon1';
+  } else if (id.includes('shield') || id.includes('offhand') || id.includes('book') || id.includes('orb')) {
+    return 'weapon2';
+  } else if (id.includes('helmet') || id.includes('crown') || id.includes('hat') || id.includes('mask')) {
+    return 'helmet';
+  } else if (id.includes('armor') || id.includes('robe') || id.includes('chest')) {
+    return 'armor';
+  } else if (id.includes('belt') || id.includes('sash')) {
+    return 'belt';
+  } else if (id.includes('pants') || id.includes('leggings') || id.includes('trousers')) {
+    return 'pants';
+  } else if (id.includes('boots') || id.includes('shoes') || id.includes('greaves')) {
+    return 'boots';
+  } else if (id.includes('gloves') || id.includes('gauntlets')) {
+    return 'gloves';
+  } else if (id.includes('bracers') || id.includes('vambrace')) {
+    return 'bracers';
+  } else if (id.includes('earring')) {
+    return 'earring';
+  } else if (id.includes('amulet') || id.includes('necklace') || id.includes('pendant')) {
+    return 'amulet';
+  } else if (id.includes('ring')) {
+    // Выбираем первый свободный слот для кольца
+    // В реальном проекте здесь должна быть логика выбора первого свободного слота
+    return 'ring1';
+  } else if (id.includes('potion') || id.includes('elixir') || id.includes('flask') || 
+      id.includes('cooked meat') || id.includes('cookedmeat') || id.includes('roasted meat') || 
+      id.includes('roastedmeat') || id.includes('fried meat') || id.includes('friedmeat')) {
+    // Аналогично для зелий и жареного мяса
+    return 'potion1';
+  }
+  
+  // Если не удалось определить тип предмета, возвращаем null или default
+  return null;
+}
+
+// Проверяет, есть ли у игрока экипированный лук
+function checkEquippedBow() {
+  // Если у нас есть доступ к глобальному состоянию экипировки
+  if (window.refreshCharacterEquipment && window.equippedItems) {
+    const weapon1 = window.equippedItems.weapon1;
+    if (weapon1 && weapon1.toLowerCase().includes('bow')) {
+      return true;
+    }
+  }
+  
+  // Попытка получить данные напрямую через API
+  // Это асинхронный подход, но поскольку функция getItemSlot должна быть синхронной,
+  // мы используем сохраненное состояние или возвращаем false, если нет данных
+  return false;
+}
+
+// Функция для проверки, является ли предмет экипируемым (оружие, одежда, зелья и т.д.)
+function isEquippableItem(itemId, itemType) {
+  if (!itemId) return false;
+  
+  // Проверка по типу предмета (если доступен)
+  if (itemType) {
+    const equipmentTypes = [
+      'Weapon', 'Tool', 'Armor', 'Helmet', 'Boots', 'Gloves', 'Shield', 
+      'Ring', 'Amulet', 'Potion', 'Consumable', 'Earring', 'Belt', 
+      'Bracers', 'Pants'
+    ];
+    
+    // Если тип предмета соответствует одному из экипируемых, считаем его экипируемым
+    if (equipmentTypes.some(type => itemType.includes(type))) {
+      return true;
+    }
+  }
+  
+  // Если тип предмета неизвестен, проверяем по названию
+  const equipmentPatterns = [
+    /sword$/i, /axe$/i, /bow$/i, /staff$/i, /dagger$/i, /hammer$/i, /club$/i, /spear$/i,
+    /knife$/i, /pickaxe$/i, /armor$/i, /helmet$/i, /boots$/i, /gloves$/i, /shield$/i, 
+    /ring$/i, /amulet$/i, /potion$/i, /elixir$/i, /flask$/i,
+    /earring$/i, /belt$/i, /bracers$/i, /pants$/i, /leggings$/i, /vambraces$/i,
+    /robe$/i, /hat$/i, /crown$/i, /mask$/i, /pendant$/i,
+    /cooked meat/i, /cookedmeat/i, /roasted meat/i, /roastedmeat/i, /fried meat/i, /friedmeat/i
+  ];
+  
+  const normalizedItemId = itemId.toLowerCase();
+  
+  // Если itemId соответствует паттерну экипировки, считаем его экипируемым
+  for (const pattern of equipmentPatterns) {
+    if (pattern.test(normalizedItemId)) {
+      return true;
+    }
+  }
+  
+  // Проверка слота для предмета
+  const slot = getItemSlot(itemId);
+  return slot !== null;
+}
+
+// Handle crafting from modal
+window.craftItemFromModal = async (itemId, quantity = 1) => {
+  try {
+    if (!window.CraftingRecipes || typeof window.CraftingRecipes.getRecipeById !== 'function') {
+      return;
+    }
+    const recipeData = window.CraftingRecipes.getRecipeById(itemId);
+    if (!recipeData) {
+      return;
+    }
+    const resultElement = document.getElementById('craft-result');
+    if (resultElement) {
+      resultElement.innerHTML = 'Crafting...';
+      resultElement.style.display = 'block';
+      resultElement.style.color = '#ffd700';
+    }
+    await loadUserResources();
+    const materialsArray = Object.entries(recipeData.materials).map(([material, amount]) => ({
+      material,
+      amount
+    }));
+    // Проверяем возможность крафта на выбранное количество
+    let enough = true;
+    for (const {material, amount} of materialsArray) {
+      let userAmount = 0;
+      const materialLower = material.toLowerCase();
+      const materialNoSpaces = materialLower.replace(/\s+/g, '');
+      const materialWithUnderscore = materialLower.replace(/\s+/g, '_');
+      const materialCapitalized = materialLower.charAt(0).toUpperCase() + materialLower.slice(1);
+      const materialProper = material.charAt(0).toUpperCase() + material.slice(1).toLowerCase();
+      const materialProperNoSpaces = materialProper.replace(/\s+/g, '');
+      
+      // Сначала проверяем точное совпадение (включая с учетом регистра)
+      if (userResources[material] !== undefined) userAmount = userResources[material];
+      // Затем проверяем стандартизированные варианты
+      else if (userResources[materialProper] !== undefined) userAmount = userResources[materialProper];
+      else if (userResources[materialLower] !== undefined) userAmount = userResources[materialLower];
+      else if (userResources[materialCapitalized] !== undefined) userAmount = userResources[materialCapitalized];
+      else if (userResources[materialNoSpaces] !== undefined) userAmount = userResources[materialNoSpaces];
+      else if (userResources[materialWithUnderscore] !== undefined) userAmount = userResources[materialWithUnderscore];
+      else if (userResources[materialProperNoSpaces] !== undefined) userAmount = userResources[materialProperNoSpaces];
+      if (materialLower === 'woodlog' && userAmount === 0) {
+        const woodlogVariants = ['Woodlog', 'WoodLog', 'Wood Log', 'Wood', 'Log', 'Logs', 'Wood_Log'];
+        for (const variant of woodlogVariants) {
+          if (userResources[variant] !== undefined) {
+            userAmount = userResources[variant];
+            break;
+          }
+        }
+      }
+      if (materialLower === 'rock' && userAmount === 0) {
+        const variants = ['Rock', 'Rocks', 'Stone', 'Stones'];
+        for (const variant of variants) {
+          if (userResources[variant] !== undefined) {
+            userAmount = userResources[variant];
+            break;
+          }
+        }
+      }
+      if (materialLower === 'fiber' && userAmount === 0) {
+        const variants = ['Fiber', 'Plant Fiber', 'PlantFiber', 'Plant_Fiber'];
+        for (const variant of variants) {
+          if (userResources[variant] !== undefined) {
+            userAmount = userResources[variant];
+            break;
+          }
+        }
+      }
+      
+      // Проверка для rope
+      if (materialLower === 'rope' && userAmount === 0) {
+        const variants = ['Rope', 'ROPE'];
+        for (const variant of variants) {
+          if (userResources[variant] !== undefined) {
+            userAmount = userResources[variant];
+            break;
+          }
+        }
+      }
+      
+      // Проверка для crushedrock
+      if (materialLower === 'crushedrock' && userAmount === 0) {
+        const variants = ['crushedrock', 'Crushedrock', 'crushed rock', 'Crushed Rock', 'Crushed_Rock', 'crushed_rock'];
+        for (const variant of variants) {
+          if (userResources[variant] !== undefined) {
+            userAmount = userResources[variant];
+            break;
+          }
+        }
+      }
+      
+      // Проверка для stick
+      if (materialLower === 'stick' && userAmount === 0) {
+        const variants = ['stick', 'Stick', 'sticks', 'Sticks', 'STICK', 'STICKS'];
+        for (const variant of variants) {
+          if (userResources[variant] !== undefined) {
+            userAmount = userResources[variant];
+            break;
+          }
+        }
+      }
+      if (userAmount < amount * quantity) {
+        enough = false;
+        break;
+      }
+    }
+    if (!enough) {
+      if (resultElement) {
+        resultElement.innerHTML = 'Not enough materials!';
+        resultElement.style.color = '#ff5555';
+      }
+      return;
+    }
+    // ... остальной код функции не меняется, только quantity теперь переменная ...
+    // Получаем ID пользователя
+    let telegramId = localStorage.getItem('telegramId');
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && 
+        window.Telegram.WebApp.initDataUnsafe.user && window.Telegram.WebApp.initDataUnsafe.user.id) {
+      telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+    }
+    if (!telegramId) {
+      if (resultElement) {
+        resultElement.innerHTML = 'Не удалось определить пользователя';
+        resultElement.style.color = '#ff5555';
+      }
+      return;
+    }
+    // Проверка активных сессий крафта (оставляем как есть)
+    try {
+      const checkResponse = await fetch(`rpg.php?action=getActiveCraftingSessions&telegramId=${telegramId}`);
+      if (!checkResponse.ok) {
+        if (resultElement) {
+          resultElement.innerHTML = 'Ошибка сервера при проверке';
+          resultElement.style.color = '#ff5555';
+        }
+        return;
+      }
+      const checkData = await checkResponse.json();
+      if (checkData.success) {
+        const activeSessions = checkData.activeCraftingSessions || [];
+        const serverTime = checkData.serverTime || Math.floor(Date.now() / 1000);
+        const trueActiveSessions = activeSessions.filter(session => 
+          session.status === 'active' && session.end_time > serverTime
+        );
+        if (trueActiveSessions.length > 0) {
+          const activeSession = trueActiveSessions[0];
+          const remainingTime = activeSession.end_time - serverTime;
+          const formattedTime = formatCraftTime(remainingTime);
+          if (resultElement) {
+            resultElement.innerHTML = `Crafting in progress! Ready in ${formattedTime}`;
+            resultElement.style.color = '#ff9900';
+          }
+          window.showNotification && window.showNotification(
+            `You can craft only one item at a time. Currently crafting: ${activeSession.item_name}, ready in ${formattedTime}`,
+            'warning',
+            5000
+          );
+          return {
+            success: false,
+            message: 'Crafting already in progress',
+            currentSession: activeSession
+          };
+        }
+      }
+    } catch (checkError) {}
+    // Текущее время в UNIX формате
+    const currentTime = Math.floor(Date.now() / 1000);
+    const craftTime = recipeData.craftTime || 0;
+    const totalCraftTime = craftTime * quantity;
+    const endTime = currentTime + totalCraftTime;
+    const updatedResources = {...userResources};
+    for (const materialId in recipeData.materials) {
+      const materialLower = materialId.toLowerCase();
+      const materialNoSpaces = materialLower.replace(/\s+/g, '');
+      const materialWithUnderscore = materialLower.replace(/\s+/g, '_');
+      const materialProper = materialId.charAt(0).toUpperCase() + materialId.slice(1).toLowerCase();
+      const materialProperNoSpaces = materialProper.replace(/\s+/g, '');
+      
+      let actualResourceKey = materialId;
+      
+      // Сначала проверяем точное совпадение (включая с учетом регистра)
+      if (updatedResources[materialId] !== undefined) {
+        actualResourceKey = materialId;
+      }
+      // Затем проверяем стандартизированные варианты
+      else if (updatedResources[materialProper] !== undefined) {
+        actualResourceKey = materialProper;
+      }
+      else if (updatedResources[materialLower] !== undefined) {
+        actualResourceKey = materialLower;
+      }
+      else if (updatedResources[materialNoSpaces] !== undefined) {
+        actualResourceKey = materialNoSpaces;
+      }
+      else if (updatedResources[materialWithUnderscore] !== undefined) {
+        actualResourceKey = materialWithUnderscore;
+      }
+      else if (updatedResources[materialProperNoSpaces] !== undefined) {
+        actualResourceKey = materialProperNoSpaces;
+      }
+      
+      // Специальная обработка для rope
+      if (materialLower === 'rope' && updatedResources[actualResourceKey] === undefined) {
+        const variants = ['Rope', 'ROPE'];
+        for (const variant of variants) {
+          if (updatedResources[variant] !== undefined) {
+            actualResourceKey = variant;
+            break;
+          }
+        }
+      }
+      
+      // Специальная обработка для crushedrock
+      if (materialLower === 'crushedrock' && updatedResources[actualResourceKey] === undefined) {
+        const variants = ['crushedrock', 'Crushedrock', 'crushed rock', 'Crushed Rock', 'Crushed_Rock', 'crushed_rock'];
+        for (const variant of variants) {
+          if (updatedResources[variant] !== undefined) {
+            actualResourceKey = variant;
+            break;
+          }
+        }
+      }
+      
+      // Специальная обработка для stick
+      if (materialLower === 'stick' && updatedResources[actualResourceKey] === undefined) {
+        const variants = ['stick', 'Stick', 'sticks', 'Sticks', 'STICK', 'STICKS'];
+        for (const variant of variants) {
+          if (updatedResources[variant] !== undefined) {
+            actualResourceKey = variant;
+            break;
+          }
+        }
+      }
+      
+      const requiredAmount = recipeData.materials[materialId] * quantity;
+      updatedResources[actualResourceKey] = (updatedResources[actualResourceKey] || 0) - requiredAmount;
+    }
+    
+    // Добавляем результат крафта с учетом поля result из рецепта
+    if (recipeData.result) {
+      // Если есть поле result, добавляем ресурсы с учетом указанного количества
+      for (const [resultItemId, resultQuantity] of Object.entries(recipeData.result)) {
+        const totalResultQuantity = resultQuantity * quantity;
+        console.log(`[craftItemFromModal] Обрабатываем результат крафта: ${resultItemId} x ${totalResultQuantity}`);
+        
+        // Проверяем, не является ли этот предмет ресурсным (который должен добавляться только при завершении)
+        const isResource = isResourceItem(resultItemId);
+        
+        if (isResource) {
+          console.log(`[craftItemFromModal] Предмет ${resultItemId} является ресурсным - будет добавлен только при завершении крафта`);
+          // Не добавляем ресурсные предметы мгновенно, они будут добавлены в updateCraftSessionStatus
+          continue;
+        }
+        
+        // Для обычных предметов продолжаем как раньше
+        console.log(`[craftItemFromModal] Добавляем обычный предмет: ${resultItemId} x ${totalResultQuantity}`);
+        
+        // Проверяем, существует ли уже такой ресурс
+        if (updatedResources[resultItemId] !== undefined) {
+          updatedResources[resultItemId] = (updatedResources[resultItemId] || 0) + totalResultQuantity;
+        } else {
+          // Если ресурса еще нет, добавляем его
+          updatedResources[resultItemId] = totalResultQuantity;
+        }
+      }
+    } else {
+      // Если поля result нет, добавляем по стандартной логике (1 предмет)
+      // Но проверяем, не является ли сам крафтовый предмет ресурсным
+      if (!isResourceItem(itemId)) {
+        console.log(`[craftItemFromModal] Добавляем обычный предмет: ${itemId} x ${quantity}`);
+        updatedResources[itemId] = (updatedResources[itemId] || 0) + quantity;
+      } else {
+        console.log(`[craftItemFromModal] Предмет ${itemId} является ресурсным - будет добавлен только при завершении крафта`);
+      }
+    }
+    
+    // Сохраняем только в глобальной переменной для совместимости
+    window.globalUserResources = {...updatedResources};
+    saveResourcesForModals(updatedResources);
+    await updateUserResourcesInIndexedDB(updatedResources);
+    const craftSessionData = {
+      telegramId: telegramId,
+      itemId: itemId,
+      itemName: recipeData.name,
+      quantity: quantity,
+      materials: JSON.stringify(recipeData.materials),
+      status: 'active',
+      startTime: currentTime,
+      endTime: endTime,
+      craftTime: totalCraftTime,
+      completedItems: 0
+    };
+    const response = await fetch(`rpg.php?action=craftItem`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
+      body: JSON.stringify(craftSessionData)
+    });
+    if (!response.ok) {
+      if (resultElement) {
+        resultElement.innerHTML = 'Ошибка сервера';
+        resultElement.style.color = '#ff5555';
+      }
+      return;
+    }
+    try {
+      const responseText = await response.text();
+      const craftResult = JSON.parse(responseText);
+      const craftMaterials = {};
+      for (const materialId in recipeData.materials) {
+        const materialLower = materialId.toLowerCase();
+        const materialNoSpaces = materialLower.replace(/\s+/g, '');
+        const materialWithUnderscore = materialLower.replace(/\s+/g, '_');
+        let actualResourceKey = materialId;
+        if (updatedResources[materialId]) actualResourceKey = materialId;
+        else if (updatedResources[materialLower]) actualResourceKey = materialLower;
+        else if (updatedResources[materialNoSpaces]) actualResourceKey = materialNoSpaces;
+        else if (updatedResources[materialWithUnderscore]) actualResourceKey = materialWithUnderscore;
+        const requiredAmount = recipeData.materials[materialId] * quantity;
+        craftMaterials[materialId] = -requiredAmount;
+      }
+      
+      // Добавляем данные о результате крафта
+      if (recipeData.result) {
+        for (const [resultItemId, resultQuantity] of Object.entries(recipeData.result)) {
+          const totalResultQuantity = resultQuantity * quantity;
+          
+          // Не добавляем ресурсные предметы - они будут обработаны при завершении крафта
+          if (isResourceItem(resultItemId)) {
+            console.log(`[craftItemFromModal] Пропускаем отправку ресурсного предмета ${resultItemId} на сервер`);
+            continue;
+          }
+          
+          craftMaterials[resultItemId] = totalResultQuantity;
+        }
+      } else {
+        // Проверяем, не является ли сам предмет ресурсным
+        if (!isResourceItem(itemId)) {
+          craftMaterials[itemId] = quantity;
+        } else {
+          console.log(`[craftItemFromModal] Пропускаем отправку ресурсного предмета ${itemId} на сервер`);
+        }
+      }
+      
+      const resourceUpdateResponse = await fetch(`rpg.php?action=updateResources`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        },
+        body: JSON.stringify({
+          telegramId: telegramId,
+          resources: craftMaterials,
+          isCrafting: true
+        })
+      });
+      if (!resourceUpdateResponse.ok) {
+        try { await resourceUpdateResponse.text(); } catch (e) {}
+      } else {
+        await fetchUpdatedResources(telegramId);
+        await refreshResourcesAfterCraft();
+      }
+      const result = {
+        success: true,
+        message: `Started crafting ${quantity} ${recipeData.name}`,
+        craftTime: craftTime,
+        endTime: endTime,
+        sessionId: craftResult.sessionId || ''
+      };
+      if (resultElement) {
+        if (result.success) {
+          resultElement.innerHTML = result.message;
+          resultElement.style.color = '#5cff5c';
+          if (typeof window.updateRecipeWithCraftingTimer === 'function') {
+            window.updateRecipeWithCraftingTimer(itemId, result.sessionId, result.endTime);
+          }
+          if (window.showNotification) {
+            window.showNotification(`Started crafting ${quantity} ${recipeData.name}`, 'info');
+          }
+        } else {
+          resultElement.innerHTML = result.error || 'Crafting error';
+          resultElement.style.color = '#ff5555';
+        }
+      }
+      return result;
+    } catch (parseError) {
+      if (resultElement) {
+        resultElement.innerHTML = 'Ошибка обработки ответа сервера';
+        resultElement.style.color = '#ff5555';
+      }
+      return {
+        success: false,
+        error: 'Ошибка обработки ответа сервера'
+      };
+    }
+  } catch (error) {
+    const resultElement = document.getElementById('craft-result');
+    if (resultElement) {
+      resultElement.innerHTML = 'Ошибка при крафте!';
+      resultElement.style.color = '#ff5555';
+    }
+    return {
+      success: false,
+      error: 'Неожиданная ошибка'
+    };
+  }
+};
+
+// Функция для получения обновленных ресурсов из БД
+const fetchUpdatedResources = async (telegramId) => {
+  if (!telegramId) {
+    return null;
+  }
+  
+  try {
+    console.log(`[ModalModule] Получаем обновленные ресурсы из БД для пользователя: ${telegramId}`);
+    
+    // Используем POST метод с телом запроса вместо GET с параметрами в URL
+    const response = await fetch('rpg.php?action=getUserData', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        telegramId: telegramId
+      })
+    });
+    
+    if (!response.ok) {
+      return null;
+    }
+  
+    // Парсим ответ
+    const responseText = await response.text();
+    
+    try {
+      const data = JSON.parse(responseText);
+      
+      if (!data.success) {
+        return null;
+      }
+      
+      // Получаем данные пользователя
+      if (data.userData) {
+        // Создаем объект для всех ресурсов
+        let combinedResources = {};
+        
+        // Получаем ресурсы из userData.resources
+        if (data.userData.resources) {
+          console.log(`[ModalModule] Получены обновленные ресурсы из БД:`, data.userData.resources);
+          combinedResources = { ...combinedResources, ...data.userData.resources };
+        }
+        
+        // Проверяем наличие предметов в inventory
+        if (data.userData.inventory) {
+          console.log('[ModalModule] Найдены предметы в inventory:', data.userData.inventory);
+          
+          // Проверяем формат inventory
+          if (typeof data.userData.inventory === 'object' && !Array.isArray(data.userData.inventory)) {
+            console.log('[ModalModule] Обработка inventory в формате объекта');
+            
+            // Обрабатываем inventory как объект {itemId: {quantity: value, name: string}}
+            for (const [itemId, itemData] of Object.entries(data.userData.inventory)) {
+              if (itemId && itemData) {
+                if (typeof itemData === 'object' && itemData.quantity !== undefined) {
+                  // Если itemData - объект с полем quantity
+                  combinedResources[itemId] = parseInt(itemData.quantity) || 0;
+                  console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${combinedResources[itemId]} (из объекта с полем quantity)`);
+                } else {
+                  // Если itemData напрямую содержит количество
+                  combinedResources[itemId] = parseInt(itemData) || 0;
+                  console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${combinedResources[itemId]} (прямое значение)`);
+                }
+              }
+            }
+          } else if (Array.isArray(data.userData.inventory)) {
+            console.log('[ModalModule] Обработка inventory в формате массива');
+            
+            // Обрабатываем inventory как массив {id: itemId, quantity: value}
+            data.userData.inventory.forEach(item => {
+              if (item && item.id) {
+                combinedResources[item.id] = parseInt(item.quantity || item.qty || 0);
+                console.log(`[ModalModule] Добавлен предмет из inventory: ${item.id} = ${combinedResources[item.id]}`);
+              }
+            });
+          }
+        }
+        
+        console.log('[ModalModule] Итоговые ресурсы после объединения:', combinedResources);
+        
+        // Обновляем глобальную переменную
+        window.globalUserResources = {...combinedResources};
+        
+        // Обновляем ресурсы в модальном модуле
+        userResources = {...combinedResources};
+        
+        // Обновляем ресурсы в IndexedDB (вторичный источник)
+        await updateUserResourcesInIndexedDB(combinedResources);
+        
+        console.log(`[ModalModule] Ресурсы успешно обновлены из БД`);
+        
+        // Если есть функция обновления интерфейса ресурсов, вызываем её
+        if (window.InventoryModule && typeof window.InventoryModule.refreshResourcesDisplay === 'function') {
+          window.InventoryModule.refreshResourcesDisplay();
+        }
+        
+        return true;
+      } else {
+        return false;
+      }
+    } catch (jsonError) {
+      return false;
+    }
+  } catch (error) {
+    return false;
+  }
+  
+  return false;
+};
+
+// Функция для обновления всех ресурсов и интерфейса после крафта
+const refreshResourcesAfterCraft = async () => {
+  try {
+    console.log('[ModalModule] Обновление ресурсов и интерфейса после крафта');
+    
+    // Синхронизируем ресурсы с IndexedDB
+    const syncResult = await syncResourcesWithIndexedDB();
+    if (!syncResult) {
+      return false;
+    }
+    
+    // Загружаем ресурсы из IndexedDB
+    const resources = await loadUserResources();
+    
+    if (!resources || Object.keys(resources).length === 0) {
+      return false;
+    }
+    
+    // Принудительно вызываем все доступные функции обновления интерфейса
+    
+    // 1. Обновляем через InventoryModule
+    try {
+      if (window.InventoryModule) {
+        // Вызываем все доступные методы обновления в InventoryModule
+        if (typeof window.InventoryModule.refreshInventoryDisplay === 'function') {
+          await window.InventoryModule.refreshInventoryDisplay();
+        }
+        
+        if (typeof window.InventoryModule.refreshResourcesDisplay === 'function') {
+          await window.InventoryModule.refreshResourcesDisplay();
+        }
+        
+        if (typeof window.InventoryModule.refreshDisplay === 'function') {
+          await window.InventoryModule.refreshDisplay();
+        }
+        
+        // Принудительно обновляем все компоненты React, если они используются
+        if (typeof window.InventoryModule.forceUpdate === 'function') {
+          await window.InventoryModule.forceUpdate();
+        }
+      }
+    } catch (invError) {
+      console.error('[ModalModule] Ошибка при обновлении InventoryModule:', invError.message);
+    }
+    
+    // 2. Обновляем через CraftingModule
+    try {
+      if (window.CraftingModule) {
+        // Принудительно обновляем loadResourcesFromDatabase в компоненте крафтинга
+        if (typeof window.CraftingModule.loadResourcesFromDatabase === 'function') {
+          await window.CraftingModule.loadResourcesFromDatabase();
+        }
+          
+        if (typeof window.CraftingModule.refreshInventory === 'function') {
+          await window.CraftingModule.refreshInventory();
+        }
+        
+        if (typeof window.CraftingModule.refreshResources === 'function') {
+          await window.CraftingModule.refreshResources();
+        }
+        
+        // Также попробуем использовать глобальную функцию
+        if (typeof window.CraftingModule.globalRefreshInventoryDisplay === 'function') {
+          await window.CraftingModule.globalRefreshInventoryDisplay();
+        }
+        
+        // Форсируем обновление UI, если доступно
+        if (typeof window.CraftingModule.forceUpdateUI === 'function') {
+          await window.CraftingModule.forceUpdateUI();
+        }
+      }
+    } catch (craftError) {
+      console.error('[ModalModule] Ошибка при обновлении CraftingModule:', craftError.message);
+    }
+    
+    // 3. Обновляем глобальные элементы интерфейса
+    try {
+      if (typeof window.updateResourcesUI === 'function') {
+        await window.updateResourcesUI();
+      }
+      
+      // Обновляем отображение значений ресурсов в DOM
+      await updateResourceValuesInDOM(resources);
+    } catch (uiError) {
+      console.error('[ModalModule] Ошибка при обновлении UI:', uiError.message);
+    }
+    
+    // 4. Отправляем событие об обновлении ресурсов
+    // Вместо отправки события напрямую, используем enhancedSaveResourcesWithSync с опцией dispatchEvent=false
+    // чтобы избежать зацикливания
+    try {
+      // Вместо прямой отправки события:
+      // const resourcesUpdatedEvent = new CustomEvent('resourcesUpdated', { 
+      //   detail: { resources, timestamp: Date.now() } 
+      // });
+      // window.dispatchEvent(resourcesUpdatedEvent);
+      
+      // Используем нашу модифицированную функцию:
+      if (window.ModalModule && typeof window.ModalModule.enhancedSaveResourcesWithSync === 'function') {
+        // Используем опцию skipServerSync=true, чтобы избежать повторного обращения к серверу
+        // и dispatchEvent=true, так как это явное обновление ресурсов
+        await window.ModalModule.enhancedSaveResourcesWithSync(resources, {
+          skipServerSync: true,
+          dispatchEvent: true
+        });
+      }
+      
+      // Дополнительно - принудительное обновление страницы крафта
+      // Отправляем прямое событие для компонента крафтинга
+      const craftingRefreshEvent = new CustomEvent('crafting-refresh', { 
+        detail: { resources, timestamp: Date.now() } 
+      });
+      window.dispatchEvent(craftingRefreshEvent);
+    } catch (eventError) {
+      console.error('[ModalModule] Ошибка при отправке события:', eventError.message);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[ModalModule] Общая ошибка при refreshResourcesAfterCraft:', error.message);
+    return false;
+  }
+};
+
+// Функция для обновления значений ресурсов в DOM
+const updateResourceValuesInDOM = async (resources) => {
+  try {
+    console.log('[ModalModule] Обновление значений ресурсов в DOM');
+    
+    
+    // 1. Обновляем все элементы с атрибутом data-resource-id
+    const resourceElements = document.querySelectorAll('[data-resource-id]');
+    
+    
+    resourceElements.forEach(element => {
+      const resourceId = element.getAttribute('data-resource-id');
+      if (!resourceId) return;
+      
+      // Ищем ресурс в разных форматах написания
+      let quantity = 0;
+      
+      // Прямой поиск по ID
+      if (resources[resourceId] !== undefined) {
+        quantity = resources[resourceId];
+      } 
+      // Поиск с учетом регистра (первая буква заглавная)
+      else {
+        const capitalized = resourceId.charAt(0).toUpperCase() + resourceId.slice(1);
+        if (resources[capitalized] !== undefined) {
+          quantity = resources[capitalized];
+        } 
+        // Поиск без пробелов
+        else {
+          const noSpaces = resourceId.replace(/\s+/g, '');
+          if (resources[noSpaces] !== undefined) {
+            quantity = resources[noSpaces];
+          }
+        }
+      }
+      
+      // Обновляем текст элемента
+      element.textContent = quantity.toString();
+      
+    });
+    
+    // 2. Обновляем все счетчики с атрибутом data-resource-counter (альтернативный вариант)
+    const counterElements = document.querySelectorAll('[data-resource-counter]');
+    
+    
+    counterElements.forEach(element => {
+      const resourceId = element.getAttribute('data-resource-counter');
+      if (!resourceId) return;
+      
+      let quantity = 0;
+      const resourceKeys = [
+        resourceId,
+        resourceId.toLowerCase(),
+        resourceId.charAt(0).toUpperCase() + resourceId.slice(1),
+        resourceId.replace(/\s+/g, ''),
+        resourceId.replace(/\s+/g, '_')
+      ];
+      
+      for (const key of resourceKeys) {
+        if (resources[key] !== undefined) {
+          quantity = resources[key];
+          break;
+        }
+      }
+      
+      // Обновляем текст элемента
+      element.textContent = quantity.toString();
+      
+    });
+    
+    // 3. Обновляем все индикаторы ресурсов в инвентаре
+    const inventoryItems = document.querySelectorAll('.inventory-item');
+    
+    
+    inventoryItems.forEach(item => {
+      const itemId = item.getAttribute('data-item-id');
+      if (!itemId) return;
+      
+      // Ищем ресурс в разных форматах
+      let quantity = 0;
+      const resourceKeys = [
+        itemId,
+        itemId.toLowerCase(),
+        itemId.charAt(0).toUpperCase() + itemId.slice(1),
+        itemId.replace(/\s+/g, ''),
+        itemId.replace(/\s+/g, '_')
+      ];
+      
+      for (const key of resourceKeys) {
+        if (resources[key] !== undefined) {
+          quantity = resources[key];
+          break;
+        }
+      }
+      
+      // Обновляем количество предмета в инвентаре
+      const qtyElement = item.querySelector('.inventory-item-quantity');
+      if (qtyElement) {
+        qtyElement.textContent = quantity.toString();
+        
+      }
+    });
+    
+    return true;
+  } catch (error) {
+    console.log('[ModalModule] Ошибка при обновлении значений в DOM:', error.message);
+    return false;
+  }
+};
+
+// Экспортируем функцию обновления ресурсов в глобальное пространство
+window.refreshResourcesAfterCraft = refreshResourcesAfterCraft;
+
+// Функция для обновления ресурсов в IndexedDB
+const updateUserResourcesInIndexedDB = async (resources) => {
+  try {
+    console.log('[ModalModule] Обновление ресурсов в IndexedDB');
+    
+    
+    // Если доступна функция из InventoryModule для сохранения ресурсов, используем её
+    if (window.InventoryModule && typeof window.InventoryModule.saveResources === 'function') {
+      
+      await window.InventoryModule.saveResources(resources);
+          return true;
+        }
+    
+    // Если есть глобальная функция сохранения ресурсов, используем её
+    if (typeof window.saveUserResourcesToIndexedDB === 'function') {
+      
+      await window.saveUserResourcesToIndexedDB(resources);
+          return true;
+        }
+    
+    // Если нет доступных функций, используем улучшенную функцию с синхронизацией
+    return await enhancedSaveResourcesWithSync(resources);
+    
+  } catch (error) {
+    console.log('[ModalModule] Ошибка при обновлении IndexedDB:', error.message);
+    return false;
+  }
+};
+
+// Оставлена только современная версия функции saveResourcesDirectlyToIndexedDB
+
+// Функция для проверки возможности крафта предмета
+const canCraft = async (materials) => {
+  try {
+    console.log('[ModalModule] Проверка возможности крафта с материалами:', materials);
+    
+    if (!materials || (Array.isArray(materials) && !materials.length) || 
+        (typeof materials === 'object' && Object.keys(materials).length === 0)) {
+      console.log('[ModalModule] Список материалов пуст, крафт возможен');
+      return true;
+    }
+    
+    // Загружаем ресурсы пользователя
+    const userResources = await loadUserResources();
+    
+    if (!userResources) {
+      console.warn('[ModalModule] Не удалось загрузить ресурсы пользователя, крафт невозможен');
+      return false;
+    }
+    
+    console.log('[ModalModule] Ресурсы пользователя:', userResources);
+    
+    // Нормализуем ресурсы пользователя для лучшего сопоставления с материалами
+    const normalizedResources = {};
+    
+    // Создаем нормализованную карту ресурсов
+    for (const [key, value] of Object.entries(userResources)) {
+      // Добавляем с оригинальным ключом
+      normalizedResources[key] = value;
+      
+      // Добавляем нормализованную версию
+      const normalizedKey = normalizeString(key);
+      normalizedResources[normalizedKey] = value;
+      
+      // Добавляем версию с первой заглавной буквой
+      const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
+      normalizedResources[capitalizedKey] = value;
+      
+      // Добавляем lowercase версию
+      const lowercaseKey = key.toLowerCase();
+      normalizedResources[lowercaseKey] = value;
+    }
+    
+    // Нормализуем материалы для обработки разных форматов (массив или объект)
+    let normalizedMaterials = [];
+    
+    if (Array.isArray(materials)) {
+      normalizedMaterials = materials.map(item => {
+        const material = typeof item === 'object' ? item : { id: item, quantity: 1 };
+        return { 
+          id: material.id || material.name || material.material || '', 
+          quantity: material.quantity || material.amount || 1
+        };
+      });
+    } else if (typeof materials === 'object') {
+      normalizedMaterials = Object.entries(materials).map(([id, quantity]) => ({ 
+        id,
+        quantity: parseInt(quantity) || 1
+      }));
+    }
+    
+    console.log('[ModalModule] Нормализованный список материалов:', normalizedMaterials);
+    
+    // Проверяем наличие каждого материала
+    for (const material of normalizedMaterials) {
+      const materialId = material.id;
+      const requiredAmount = parseInt(material.quantity) || 1;
+      
+      if (!materialId) continue;
+      
+      // Различные варианты написания ключа материала
+      const materialNormalized = normalizeString(materialId);
+      const materialCapitalized = materialId.charAt(0).toUpperCase() + materialId.slice(1);
+      const materialLowercase = materialId.toLowerCase();
+      
+      // Возможные формы ключа для проверки
+      const possibleKeys = [
+        materialId,
+        materialNormalized,
+        materialCapitalized,
+        materialLowercase
+      ];
+      
+      let found = false;
+      let foundAmount = 0;
+      let foundKey = '';
+      
+      // Проверяем все возможные ключи
+      for (const key of possibleKeys) {
+        if (normalizedResources[key] !== undefined) {
+          foundAmount = parseInt(normalizedResources[key]) || 0;
+          foundKey = key;
+          found = true;
+          console.log(`[ModalModule] Найден ключ ${key} для материала ${materialId}, количество: ${foundAmount}`);
+          break;
+        }
+      }
+      
+      // Если ключ не найден напрямую, ищем по специальным случаям
+      if (!found) {
+        // Особая обработка для woodlog
+        if (materialId === 'woodlog' || materialLowercase === 'woodlog') {
+          for (const specialKey of ['Wood', 'Log', 'Logs', 'WoodLog', 'Wood Log']) {
+            if (userResources[specialKey] !== undefined) {
+              foundAmount = parseInt(userResources[specialKey]) || 0;
+              foundKey = specialKey;
+              found = true;
+              console.log(`[ModalModule] Найден специальный ключ ${specialKey} для woodlog, количество: ${foundAmount}`);
+              break;
+            }
+          }
+        }
+        
+        // Особая обработка для ironore/Iron Ore
+        if (!found && (materialId === 'ironore' || materialLowercase === 'ironore' || 
+                      materialId === 'Iron Ore' || materialLowercase === 'iron ore')) {
+          for (const specialKey of ['iron ore', 'Iron Ore', 'Iron_Ore', 'iron_ore', 'ironore', 'IronOre']) {
+            if (userResources[specialKey] !== undefined) {
+              foundAmount = parseInt(userResources[specialKey]) || 0;
+              foundKey = specialKey;
+              found = true;
+              console.log(`[ModalModule] Найден специальный ключ ${specialKey} для ${materialId}, количество: ${foundAmount}`);
+              break;
+            }
+          }
+        }
+        
+        // Особая обработка для rope
+        if (!found && (materialId === 'rope' || materialLowercase === 'rope')) {
+          for (const specialKey of ['Rope', 'ROPE', 'rope']) {
+            if (userResources[specialKey] !== undefined) {
+              foundAmount = parseInt(userResources[specialKey]) || 0;
+              foundKey = specialKey;
+              found = true;
+              console.log(`[ModalModule] Найден специальный ключ ${specialKey} для rope, количество: ${foundAmount}`);
+              break;
+            }
+          }
+        }
+        
+        // Особая обработка для crushedrock/crushed rock
+        if (!found && (materialId === 'crushedrock' || materialLowercase === 'crushedrock' || 
+                      materialId === 'crushed rock' || materialLowercase === 'crushed rock')) {
+          for (const specialKey of ['crushedrock', 'Crushedrock', 'crushed rock', 'Crushed Rock', 'Crushed_Rock', 'crushed_rock']) {
+            if (userResources[specialKey] !== undefined) {
+              foundAmount = parseInt(userResources[specialKey]) || 0;
+              foundKey = specialKey;
+              found = true;
+              console.log(`[ModalModule] Найден специальный ключ ${specialKey} для crushedrock, количество: ${foundAmount}`);
+              break;
+            }
+          }
+        }
+        
+        // Особая обработка для stick/sticks
+        if (!found && (materialId === 'stick' || materialLowercase === 'stick')) {
+          for (const specialKey of ['stick', 'Stick', 'sticks', 'Sticks', 'STICK', 'STICKS']) {
+            if (userResources[specialKey] !== undefined) {
+              foundAmount = parseInt(userResources[specialKey]) || 0;
+              foundKey = specialKey;
+              found = true;
+              console.log(`[ModalModule] Найден специальный ключ ${specialKey} для stick, количество: ${foundAmount}`);
+              break;
+            }
+          }
+        }
+      }
+      
+      // Если все еще не найден, попробуем частичные совпадения
+      if (!found) {
+        for (const [key, value] of Object.entries(userResources)) {
+          const keyNormalized = normalizeString(key);
+          if (keyNormalized.includes(materialNormalized) || materialNormalized.includes(keyNormalized)) {
+            foundAmount = parseInt(value) || 0;
+            foundKey = key;
+            found = true;
+            console.log(`[ModalModule] Найдено частичное совпадение ${key} для ${materialId}, количество: ${foundAmount}`);
+            break;
+          }
+        }
+      }
+      
+      // Проверяем, достаточно ли материалов
+      if (!found || foundAmount < requiredAmount) {
+        console.warn(`[ModalModule] Недостаточно материала ${materialId} для крафта. Найдено: ${foundAmount}, требуется: ${requiredAmount}, ключ: ${foundKey}`);
+        return false;
+      }
+    }
+    
+    console.log('[ModalModule] Все материалы доступны, крафт возможен!');
+    return true;
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при проверке возможности крафта:', error);
+    return false;
+  }
+};
+
+// Функция для загрузки ресурсов пользователя с проверкой нескольких источников
+const loadUserResources = async () => {
+  try {
+    console.log('[ModalModule] Начало процесса загрузки ресурсов и уровня персонажа');
+    let resources = {};
+    
+    // Пытаемся получить сохраненный уровень из глобальной переменной
+    if (window.playerLevel) {
+      console.log(`[ModalModule] Уровень персонажа загружен из глобальной переменной: ${window.playerLevel}`);
+      playerLevel = window.playerLevel;
+    } else {
+      console.log('[ModalModule] Глобальная переменная window.playerLevel не найдена');
+    }
+    
+    // Источник 1: Глобальная переменная (самый быстрый)
+    if (window.globalUserResources && Object.keys(window.globalUserResources).length > 0) {
+      console.log('[ModalModule] Ресурсы загружены из глобальной переменной globalUserResources');
+      
+      // Загружаем специальные ресурсы из IndexedDB и объединяем с глобальными
+      resources = { ...window.globalUserResources };
+      const specialResources = await loadSpecialResourcesFromIndexedDB();
+      if (specialResources && Object.keys(specialResources).length > 0) {
+        resources = { ...resources, ...specialResources };
+        console.log('[ModalModule] Добавлены специальные ресурсы из IndexedDB:', Object.keys(specialResources).join(', '));
+      }
+      
+      return resources;
+    } else {
+      console.log('[ModalModule] Глобальная переменная globalUserResources не найдена или пуста');
+    }
+    
+    // Источник 2: IndexedDB через loadResourcesFromIndexedDB
+    try {
+      console.log('[ModalModule] Попытка загрузки ресурсов из IndexedDB...');
+      const userInventory = await loadResourcesFromIndexedDB();
+      console.log('[ModalModule] Результат загрузки из IndexedDB:', userInventory ? 'Успешно' : 'Данные не найдены');
+      
+      // Также пробуем загрузить уровень персонажа из IndexedDB
+      console.log('[ModalModule] Попытка загрузки уровня персонажа из IndexedDB...');
+      if (window.IndexedDBModule && typeof window.IndexedDBModule.getUserData === 'function') {
+        try {
+          console.log('[ModalModule] Вызов функции IndexedDBModule.getUserData()...');
+          const userData = await window.IndexedDBModule.getUserData();
+          console.log('[ModalModule] Результат getUserData:', userData);
+          
+          // Добавляем обработку предметов из inventory
+          if (userData && userData.inventory) {
+            console.log('[ModalModule] Найдены предметы в inventory:', userData.inventory);
+            
+            // Проверяем, что inventory - это объект
+            if (typeof userData.inventory === 'object' && !Array.isArray(userData.inventory)) {
+              console.log('[ModalModule] Обработка inventory в формате объекта');
+              
+              // Обрабатываем inventory как объект {itemId: {quantity: value, name: string}}
+              for (const [itemId, itemData] of Object.entries(userData.inventory)) {
+                if (itemId && itemData) {
+                  if (typeof itemData === 'object' && itemData.quantity !== undefined) {
+                    // Если itemData - объект с полем quantity
+                    resources[itemId] = parseInt(itemData.quantity) || 0;
+                    console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${resources[itemId]} (из объекта с полем quantity)`);
+                  } else {
+                    // Если itemData напрямую содержит количество
+                    resources[itemId] = parseInt(itemData) || 0;
+                    console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${resources[itemId]} (прямое значение)`);
+                  }
+                }
+              }
+            } else if (Array.isArray(userData.inventory)) {
+              console.log('[ModalModule] Обработка inventory в формате массива');
+              
+              // Обрабатываем inventory как массив {id: itemId, quantity: value}
+              userData.inventory.forEach(item => {
+                if (item && item.id) {
+                  resources[item.id] = parseInt(item.quantity || item.qty || 0);
+                  console.log(`[ModalModule] Добавлен предмет из inventory: ${item.id} = ${resources[item.id]}`);
+                }
+              });
+            }
+            
+            console.log('[ModalModule] Результат обработки inventory:', resources);
+          }
+          
+          if (userData && userData.level) {
+            console.log(`[ModalModule] Успешно загружен уровень персонажа из IndexedDB: ${userData.level}`);
+            playerLevel = userData.level;
+            window.playerLevel = userData.level;
+          } else {
+            console.log('[ModalModule] Уровень персонажа не найден в полученных данных из IndexedDB');
+            console.log('[ModalModule] Полученные данные:', userData);
+          }
+        } catch (levelErr) {
+          console.warn('[ModalModule] Ошибка загрузки уровня персонажа из IndexedDB:', levelErr);
+          console.error('[ModalModule] Трассировка ошибки:', levelErr.stack);
+        }
+      } else {
+        console.log('[ModalModule] Функция IndexedDBModule.getUserData не доступна');
+        console.log('IndexedDBModule доступен:', !!window.IndexedDBModule);
+        if (window.IndexedDBModule) {
+          console.log('Методы IndexedDBModule:', Object.keys(window.IndexedDBModule));
+        }
+      }
+      
+      if (userInventory && Object.keys(userInventory).length > 0) {
+        if (typeof userInventory === 'object' && !Array.isArray(userInventory)) {
+          console.log('[ModalModule] Получен объект ресурсов из IndexedDB');
+          
+          // Загружаем специальные ресурсы и объединяем с основными
+          resources = { ...resources, ...userInventory };
+          const specialResources = await loadSpecialResourcesFromIndexedDB();
+          if (specialResources && Object.keys(specialResources).length > 0) {
+            resources = { ...resources, ...specialResources };
+            console.log('[ModalModule] Добавлены специальные ресурсы из IndexedDB:', Object.keys(specialResources).join(', '));
+          }
+          
+          return resources;
+        } else if (Array.isArray(userInventory)) {
+          console.log('[ModalModule] Получен массив предметов из IndexedDB, преобразуем в объект ресурсов');
+          userInventory.forEach(item => {
+            if (item && item.id) {
+              resources[item.id] = parseInt(item.quantity || item.qty || 0);
+            }
+          });
+          
+          // Загружаем специальные ресурсы и объединяем с основными
+          const specialResources = await loadSpecialResourcesFromIndexedDB();
+          if (specialResources && Object.keys(specialResources).length > 0) {
+            resources = { ...resources, ...specialResources };
+            console.log('[ModalModule] Добавлены специальные ресурсы из IndexedDB:', Object.keys(specialResources).join(', '));
+          }
+          
+          return resources;
+        }
+      } else {
+        console.log('[ModalModule] IndexedDB не содержит данных об инвентаре');
+      }
+    } catch (idbError) {
+      console.warn('[ModalModule] Ошибка загрузки из IndexedDB:', idbError);
+      console.error('[ModalModule] Трассировка ошибки IndexedDB:', idbError.stack);
+    }
+    
+    // Источник 3: localStorage
+    try {
+      const storageData = localStorage.getItem('rpg_user_resources') || localStorage.getItem('user_resources');
+      if (storageData) {
+        const parsedData = JSON.parse(storageData);
+        if (parsedData && Object.keys(parsedData).length > 0) {
+          // Убираем лог
+          return parsedData;
+        }
+      }
+      
+      // Попробуем загрузить уровень персонажа из localStorage
+      const levelData = localStorage.getItem('rpg_user_level');
+      if (levelData) {
+        try {
+          const level = parseInt(levelData);
+          if (!isNaN(level)) {
+            console.log(`[ModalModule] Загружен уровень персонажа из localStorage: ${level}`);
+            playerLevel = level;
+            window.playerLevel = level;
+          }
+        } catch (levelErr) {
+          console.warn('[ModalModule] Ошибка при загрузке уровня из localStorage:', levelErr);
+        }
+      }
+    } catch (storageError) {
+      console.warn('[ModalModule] Ошибка загрузки из localStorage:', storageError);
+    }
+    
+    // Источник 4: Через CraftingModule.loadResources (если доступен)
+    if (window.CraftingModule && typeof window.CraftingModule.loadResources === 'function') {
+      try {
+        const result = await window.CraftingModule.loadResources();
+        if (result && result.resources && Object.keys(result.resources).length > 0) {
+          // Убираем лог
+          return result.resources;
+        }
+      } catch (craftError) {
+        console.warn('[ModalModule] Ошибка загрузки через CraftingModule:', craftError);
+      }
+    }
+    
+    
+    // Источник 5: Через RPGApp.loadUserData (загрузка из app.js)
+    if (window.RPGApp && typeof window.RPGApp.loadUserData === 'function') {
+      try {
+        const userData = await window.RPGApp.loadUserData();
+        if (userData) {
+          // Получаем уровень персонажа
+          if (userData.level) {
+            console.log(`[ModalModule] Загружен уровень персонажа через RPGApp: ${userData.level}`);
+            playerLevel = userData.level;
+            window.playerLevel = userData.level;
+            
+            // Сохраняем в localStorage для кэширования
+            localStorage.setItem('rpg_user_level', userData.level);
+          }
+          
+          // Получаем ресурсы
+          if (userData.resources) {
+            console.log('[ModalModule] Загружены ресурсы через RPGApp');
+            window.globalUserResources = {...userData.resources};
+            return userData.resources;
+          }
+        }
+      } catch (rpgAppError) {
+        console.warn('[ModalModule] Ошибка загрузки через RPGApp.loadUserData:', rpgAppError);
+      }
+    }
+    
+    // Проверяем, не слишком ли часто обращаемся к серверу
+    const now = Date.now();
+    if (now - lastServerRequestTime < SERVER_REQUEST_THROTTLE) {
+      console.warn('[ModalModule] Запрос к серверу отложен (троттлинг)');
+      return window.globalUserResources || {};
+    }
+    
+    // Если все источники не дали результатов, пробуем прямой запрос к серверу
+    // Убираем лог
+    
+    try {
+      // Определяем ID пользователя
+      let telegramId;
+      if (window.Telegram && window.Telegram.WebApp && 
+          window.Telegram.WebApp.initDataUnsafe && 
+          window.Telegram.WebApp.initDataUnsafe.user) {
+        telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+      } else {
+        telegramId = localStorage.getItem('telegramId');
+      }
+      
+      if (!telegramId) {
+        console.warn('[ModalModule] Не удалось определить telegramId, возвращаем пустой объект');
+        return {};
+      }
+      
+      // Запрашиваем данные пользователя с сервера
+      console.log(`[ModalModule] Запрос данных с сервера для telegramId: ${telegramId}`);
+      lastServerRequestTime = Date.now(); // Устанавливаем время последнего запроса
+      
+      // Сначала пробуем запросить полные данные пользователя через getUserData
+      const userDataResponse = await fetch(`rpg.php?action=getUserData`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        },
+        body: JSON.stringify({ telegramId })
+      });
+      
+      if (userDataResponse.ok) {
+        console.log('[ModalModule] Получен успешный ответ от getUserData');
+        const userData = await userDataResponse.json();
+        console.log('[ModalModule] Данные getUserData:', userData);
+        
+        if (userData.success && userData.userData) {
+          console.log('[ModalModule] Обработка данных пользователя из getUserData');
+          let combinedResources = {};
+          
+          // Загружаем ресурсы, если они есть
+          if (userData.userData.resources) {
+            console.log('[ModalModule] Добавляем ресурсы из userData.resources:', userData.userData.resources);
+            combinedResources = { ...combinedResources, ...userData.userData.resources };
+          }
+          
+          // Загружаем предметы из inventory, если они есть
+          if (userData.userData.inventory) {
+            console.log('[ModalModule] Найдены предметы в inventory:', userData.userData.inventory);
+            
+            // Проверяем, что inventory - это объект
+            if (typeof userData.userData.inventory === 'object' && !Array.isArray(userData.userData.inventory)) {
+              console.log('[ModalModule] Обработка inventory в формате объекта');
+              
+              // Обрабатываем inventory как объект {itemId: {quantity: value, name: string}}
+              for (const [itemId, itemData] of Object.entries(userData.userData.inventory)) {
+                if (itemId && itemData) {
+                  if (typeof itemData === 'object' && itemData.quantity !== undefined) {
+                    // Если itemData - объект с полем quantity
+                    combinedResources[itemId] = parseInt(itemData.quantity) || 0;
+                    console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${combinedResources[itemId]} (из объекта с полем quantity)`);
+                  } else {
+                    // Если itemData напрямую содержит количество
+                    combinedResources[itemId] = parseInt(itemData) || 0;
+                    console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${combinedResources[itemId]} (прямое значение)`);
+                  }
+                }
+              }
+            } else if (Array.isArray(userData.userData.inventory)) {
+              console.log('[ModalModule] Обработка inventory в формате массива');
+              
+              // Обрабатываем inventory как массив {id: itemId, quantity: value}
+              userData.userData.inventory.forEach(item => {
+                if (item && item.id) {
+                  combinedResources[item.id] = parseInt(item.quantity || item.qty || 0);
+                  console.log(`[ModalModule] Добавлен предмет из inventory: ${item.id} = ${combinedResources[item.id]}`);
+                }
+              });
+            }
+          }
+          
+          // Обновляем глобальные переменные
+          if (Object.keys(combinedResources).length > 0) {
+            console.log('[ModalModule] Итоговые ресурсы после обработки getUserData:', combinedResources);
+            window.globalUserResources = { ...combinedResources };
+            
+            // Сохраняем в IndexedDB, если функция доступна
+            if (typeof updateUserResourcesInIndexedDB === 'function') {
+              updateUserResourcesInIndexedDB(combinedResources).catch(e => {
+                console.error('[ModalModule] Ошибка при сохранении ресурсов в IndexedDB:', e);
+              });
+            }
+            
+            // Обновляем уровень персонажа, если доступен
+            if (userData.userData.level) {
+              console.log(`[ModalModule] Обновляем уровень персонажа: ${userData.userData.level}`);
+              playerLevel = userData.userData.level;
+              window.playerLevel = userData.userData.level;
+              localStorage.setItem('rpg_user_level', userData.userData.level);
+            }
+            
+            return combinedResources;
+          }
+        } else {
+          console.warn('[ModalModule] getUserData не вернул данные пользователя или произошла ошибка');
+        }
+      } else {
+        console.warn(`[ModalModule] Ошибка запроса getUserData: ${userDataResponse.status}`);
+      }
+      
+      // Если не получилось загрузить через getUserData, пробуем через getUserResources
+      console.log('[ModalModule] Пробуем загрузить ресурсы через getUserResources');
+      const response = await fetch(`rpg.php?action=getUserResources`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        },
+        body: JSON.stringify({ telegramId })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.success && data.resources) {
+        console.log('[ModalModule] Получены ресурсы через getUserResources');
+        
+        // Сохраняем в глобальную переменную и IndexedDB
+        window.globalUserResources = data.resources;
+        if (typeof updateUserResourcesInIndexedDB === 'function') {
+          updateUserResourcesInIndexedDB(data.resources).catch(e => {
+            console.error('[ModalModule] Ошибка при сохранении ресурсов в IndexedDB:', e);
+          });
+        }
+        
+        return data.resources;
+      } else {
+        console.warn('[ModalModule] Сервер вернул ошибку или пустые данные при запросе ресурсов');
+        return {};
+      }
+    } catch (serverError) {
+      console.error('[ModalModule] Ошибка при запросе к серверу:', serverError);
+      return {};
+    }
+    
+  } catch (error) {
+    console.error('[ModalModule] Критическая ошибка при загрузке ресурсов:', error);
+    // Возвращаем пустой объект вместо null, чтобы избежать ошибок
+    return {};
+  }
+};
+
+// Функция для загрузки ресурсов из inventory в rpgDatabase
+const loadResourcesFromIndexedDB = (telegramId) => {
+  return new Promise((resolve, reject) => {
+    try {
+      // Определяем ID пользователя
+      if (!telegramId) {
+        if (window.Telegram && window.Telegram.WebApp && 
+            window.Telegram.WebApp.initDataUnsafe && 
+            window.Telegram.WebApp.initDataUnsafe.user) {
+          telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+        } else {
+          telegramId = localStorage.getItem('telegramId') || 'test_user';
+        }
+      }
+
+      // Проверяем сначала, доступен ли IndexedDBModule и его метод getInventoryItems
+      if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function') {
+        console.log('[ModalModule] Загрузка ресурсов из rpgDatabase.inventory через IndexedDBModule.getInventoryItems');
+        
+        window.IndexedDBModule.getInventoryItems()
+          .then(items => {
+            // Преобразуем инвентарь в формат ресурсов
+            const resources = {};
+            
+            // Добавляем все предметы типа 'resource' из инвентаря в ресурсы
+            for (const item of items) {
+              if (item.type === 'resource' || !item.type) {
+                resources[item.id] = item.quantity || 0;
+              }
+            }
+            
+            console.log('[ModalModule] Ресурсы успешно загружены из rpgDatabase.inventory:', resources);
+            resolve(resources);
+          })
+          .catch(error => {
+            console.error('[ModalModule] Ошибка при загрузке инвентаря через IndexedDBModule:', error);
+            // Пробуем запасной вариант - открываем IndexedDB напрямую
+            fallbackToDirectIndexedDB();
+          });
+      } else {
+        console.log('[ModalModule] IndexedDBModule.getInventoryItems не доступен, используем прямой доступ к IndexedDB');
+        fallbackToDirectIndexedDB();
+      }
+      
+      // Запасной вариант - прямое открытие IndexedDB
+      function fallbackToDirectIndexedDB() {
+        // Открываем rpgDatabase напрямую
+        const request = indexedDB.open('rpgDatabase', 10);
+        
+        request.onerror = (event) => {
+          console.error('[ModalModule] Ошибка при открытии rpgDatabase:', event.target.error);
+          // Если не удалось открыть rpgDatabase, пробуем UserResourcesDB
+          tryOpenUserResourcesDB();
+        };
+        
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          
+          if (!db.objectStoreNames.contains('inventory')) {
+            console.warn('[ModalModule] В rpgDatabase нет хранилища inventory');
+            db.close();
+            
+            // Если нет inventory, пробуем открыть старую UserResourcesDB
+            tryOpenUserResourcesDB();
+            return;
+          }
+          
+          try {
+            const transaction = db.transaction(['inventory'], 'readonly');
+            const store = transaction.objectStore('inventory');
+            const getRequest = store.getAll();
+            
+            getRequest.onsuccess = (event) => {
+              const items = getRequest.result || [];
+              const resources = {};
+              
+              // Преобразуем инвентарь в формат ресурсов
+              for (const item of items) {
+                if (item.type === 'resource' || !item.type) {
+                  resources[item.id] = item.quantity || 0;
+                }
+              }
+              
+              console.log('[ModalModule] Ресурсы загружены из прямого доступа к rpgDatabase.inventory:', resources);
+              db.close();
+              resolve(resources);
+            };
+            
+            getRequest.onerror = (event) => {
+              console.error('[ModalModule] Ошибка при получении данных из inventory:', event.target.error);
+              db.close();
+              
+              // Если не удалось получить данные из inventory, пробуем UserResourcesDB
+              tryOpenUserResourcesDB();
+            };
+          } catch (err) {
+            console.error('[ModalModule] Ошибка при работе с rpgDatabase.inventory:', err);
+            db.close();
+            
+            // Если произошла ошибка, пробуем UserResourcesDB
+            tryOpenUserResourcesDB();
+          }
+        };
+      }
+      
+      // Пробуем открыть старую UserResourcesDB как запасной вариант
+      function tryOpenUserResourcesDB() {
+        console.log('[ModalModule] Попытка открыть UserResourcesDB как запасной вариант');
+      const request = indexedDB.open('UserResourcesDB', 10);
+      
+      request.onerror = (event) => {
+          console.error('[ModalModule] Ошибка при открытии UserResourcesDB:', event.target.error);
+          resolve({}); // Возвращаем пустой объект, так как все попытки не удались
+      };
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        
+        if (!db.objectStoreNames.contains('resources')) {
+            console.warn('[ModalModule] В UserResourcesDB нет хранилища resources');
+          db.close();
+          resolve({});
+          return;
+        }
+        
+        try {
+          const userId = `user_${telegramId}`;
+          const transaction = db.transaction(['resources'], 'readonly');
+          const store = transaction.objectStore('resources');
+          const getRequest = store.get(userId);
+          
+          getRequest.onsuccess = (event) => {
+            const resources = getRequest.result || {};
+              console.log('[ModalModule] Ресурсы загружены из UserResourcesDB (запасной вариант):', resources);
+            db.close();
+            resolve(resources);
+          };
+          
+          getRequest.onerror = (event) => {
+              console.error('[ModalModule] Ошибка при получении данных из UserResourcesDB:', event.target.error);
+            db.close();
+              resolve({});
+          };
+        } catch (err) {
+            console.error('[ModalModule] Ошибка при работе с UserResourcesDB:', err);
+          db.close();
+            resolve({});
+        }
+      };
+        }
+    } catch (error) {
+      console.error('[ModalModule] Непредвиденная ошибка в loadResourcesFromIndexedDB:', error);
+      reject(error);
+    }
+  });
+};
+
+// Helper function to normalize resources for key-matching
+const normalizeResourcesObject = (resources) => {
+  const normalizedResources = {};
+  for (const [key, value] of Object.entries(resources)) {
+    // Add original key
+    normalizedResources[key] = value;
+    
+    // Add lowercase version
+    const lowerKey = key.toLowerCase();
+    if (lowerKey !== key) {
+      normalizedResources[lowerKey] = value;
+    }
+    
+    // Add version without spaces
+    const noSpacesKey = key.replace(/\s+/g, '').toLowerCase();
+    if (noSpacesKey !== lowerKey && noSpacesKey !== key) {
+      normalizedResources[noSpacesKey] = value;
+    }
+    
+    // Add version with underscores instead of spaces
+    const underscoreKey = key.replace(/\s+/g, '_').toLowerCase();
+    if (underscoreKey !== noSpacesKey && underscoreKey !== lowerKey && underscoreKey !== key) {
+      normalizedResources[underscoreKey] = value;
+    }
+  }
+  return normalizedResources;
+};
+
+// Helper function to find resource key by material name
+const findResourceKey = (material, normalizedResources, originalResources) => {
+  // Try exact match first
+  const materialLower = material.toLowerCase();
+  const materialNoSpaces = materialLower.replace(/\s+/g, '');
+  const materialWithUnderscore = materialLower.replace(/\s+/g, '_');
+  const materialCapitalized = material.charAt(0).toUpperCase() + material.slice(1);
+  const materialAllCaps = material.toUpperCase();
+  
+  // All possible keys to check
+  const possibleKeys = [
+    material,
+    materialLower,
+    materialNoSpaces,
+    materialWithUnderscore,
+    materialCapitalized,
+    materialAllCaps,
+    material.charAt(0).toUpperCase() + materialLower.slice(1)
+  ];
+  
+  // Look for exact matches in normalized resources
+  for (const key of possibleKeys) {
+    if (normalizedResources[key] !== undefined) {
+      return {
+        key: key,
+        originalKey: key,
+        amount: parseInt(normalizedResources[key]) || 0
+      };
+    }
+  }
+  
+  // Special handling for woodlog
+  if (material === 'woodlog' || materialLower === 'woodlog') {
+    const specialKeys = ['Wood', 'Wood Log', 'Log', 'Logs', 'WoodLog'];
+    for (const specialKey of specialKeys) {
+      if (originalResources[specialKey] !== undefined) {
+        return {
+          key: specialKey,
+          originalKey: specialKey,
+          amount: parseInt(originalResources[specialKey]) || 0
+        };
+      }
+    }
+  }
+  
+  // Partial matching
+  for (const [key, value] of Object.entries(originalResources)) {
+    const keyLower = key.toLowerCase();
+    if (keyLower.includes(materialLower) || 
+        materialLower.includes(keyLower) ||
+        keyLower.includes(materialNoSpaces) ||
+        materialNoSpaces.includes(keyLower)) {
+      return {
+        key: key,
+        originalKey: key,
+        amount: parseInt(value) || 0
+      };
+    }
+  }
+  
+  // First word matching
+  const materialWords = material.split(/\s+/);
+  if (materialWords.length > 0) {
+    const firstWord = materialWords[0].toLowerCase();
+    for (const [key, value] of Object.entries(originalResources)) {
+      const keyLower = key.toLowerCase();
+      if (keyLower.startsWith(firstWord) || firstWord.startsWith(keyLower)) {
+        return {
+          key: key,
+          originalKey: key, 
+          amount: parseInt(value) || 0
+        };
+      }
+    }
+  }
+  
+  // Not found
+  return { key: material, originalKey: null, amount: 0 };
+};
+
+// Функция для крафта предмета из модального окна
+const craftItem = async (item, amount = 1) => {
+  try {
+    console.log(`[ModalModule] Запрос на крафт предмета:`, item, 'количество:', amount);
+    
+    if (!item || !item.id) {
+      console.error('[ModalModule] Ошибка: отсутствует ID предмета для крафта');
+      return false;
+    }
+    
+    // Проверяем есть ли модуль CraftingModule
+    if (!window.CraftingModule) {
+      console.error('[ModalModule] CraftingModule не найден');
+      return false;
+    }
+    
+    // Получаем ID пользователя
+    let telegramId = localStorage.getItem('telegramId');
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && 
+        window.Telegram.WebApp.initDataUnsafe.user && window.Telegram.WebApp.initDataUnsafe.user.id) {
+      telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+    }
+    
+    if (!telegramId) {
+      console.error('[ModalModule] Не удалось определить ID пользователя');
+      return false;
+    }
+    
+    // Проверяем, есть ли у пользователя активные сессии крафта
+    try {
+      const checkResponse = await fetch(`rpg.php?action=getActiveCraftingSessions&telegramId=${telegramId}`);
+      
+      if (!checkResponse.ok) {
+        console.error(`[ModalModule] Ошибка при проверке активных сессий: ${checkResponse.status}`);
+        return false;
+      }
+      
+      const checkData = await checkResponse.json();
+      
+      if (checkData.success) {
+        const activeSessions = checkData.activeCraftingSessions || [];
+        const serverTime = checkData.serverTime || Math.floor(Date.now() / 1000);
+        
+        // Фильтруем только действительно активные сессии (не завершенные по времени)
+        const trueActiveSessions = activeSessions.filter(session => 
+          session.status === 'active' && session.end_time > serverTime
+        );
+        
+        console.log(`[ModalModule] Найдено активных сессий: ${trueActiveSessions.length}`);
+        
+        if (trueActiveSessions.length > 0) {
+          // У пользователя уже есть активная сессия крафта
+          console.warn(`[ModalModule] Невозможно начать новый крафт, у пользователя уже есть активная сессия`);
+          
+          // Получаем информацию о текущей активной сессии
+          const activeSession = trueActiveSessions[0];
+          const remainingTime = activeSession.end_time - serverTime;
+          const formattedTime = formatCraftTime(remainingTime);
+          
+          // Показываем уведомление
+          window.showNotification && window.showNotification(
+            `You can craft only one item at a time. Currently crafting: ${activeSession.item_name}, ready in ${formattedTime}`,
+            'warning',
+            5000
+          );
+          
+          return {
+            success: false,
+            message: 'Crafting already in progress',
+            currentSession: activeSession
+          };
+        }
+      }
+    } catch (checkError) {
+      console.error(`[ModalModule] Ошибка при проверке активных сессий:`, checkError);
+    }
+    
+    // Получаем рецепт по ID предмета
+    const recipe = window.CraftingModule.getCraftingRecipe(item.id);
+    if (!recipe) {
+      console.error(`[ModalModule] Рецепт для предмета ${item.id} не найден`);
+      return false;
+    }
+    
+    console.log(`[ModalModule] Найден рецепт для ${item.id}:`, recipe);
+    
+    // Проверяем возможность крафта с текущими ресурсами
+    if (!await canCraft(recipe.materials)) {
+      console.warn(`[ModalModule] Недостаточно материалов для крафта ${item.id}`);
+      return false;
+    }
+    
+    // Загружаем ресурсы пользователя
+    let userResources = await loadUserResources();
+    if (!userResources) {
+      console.error('[ModalModule] Не удалось загрузить ресурсы пользователя для крафта');
+      return false;
+    }
+    
+    console.log('[ModalModule] Ресурсы пользователя перед крафтом:', userResources);
+    
+    // Нормализуем ресурсы для лучшего сопоставления
+    const normalizedResources = {};
+    for (const [key, value] of Object.entries(userResources)) {
+      normalizedResources[key] = value;
+      normalizedResources[normalizeString(key)] = value;
+      normalizedResources[key.toLowerCase()] = value;
+      normalizedResources[key.charAt(0).toUpperCase() + key.slice(1)] = value;
+    }
+    
+    // Обработка материалов из рецепта
+    const recipeMaterials = Array.isArray(recipe.materials) 
+      ? recipe.materials.map(mat => ({ id: mat.id || mat.material, quantity: mat.quantity || mat.amount || 1 }))
+      : Object.entries(recipe.materials).map(([id, quantity]) => ({ id, quantity }));
+    
+    console.log('[ModalModule] Материалы для крафта:', recipeMaterials);
+    
+    // Отнимаем материалы из ресурсов пользователя
+    for (const material of recipeMaterials) {
+      const materialId = material.id;
+      const requiredAmount = parseInt(material.quantity) || 1;
+      
+      if (!materialId || requiredAmount <= 0) continue;
+      
+      // Ищем корректный ключ ресурса
+      const materialNormalized = normalizeString(materialId);
+      let foundKey = null;
+      let foundOriginalKey = null;
+      
+      // Проверяем все возможные формы ключа
+      const possibleKeys = [
+        materialId,
+        materialNormalized,
+        materialId.toLowerCase(),
+        materialId.charAt(0).toUpperCase() + materialId.slice(1)
+      ];
+      
+      for (const key of possibleKeys) {
+        if (normalizedResources[key] !== undefined) {
+          foundKey = key;
+          break;
+        }
+      }
+      
+      // Поиск в оригинальных ресурсах
+      if (!foundKey) {
+        // Особая обработка для woodlog
+        if (materialId === 'woodlog' || materialId.toLowerCase() === 'woodlog') {
+          for (const specialKey of ['Wood', 'Log', 'Logs', 'WoodLog', 'Wood Log']) {
+            if (userResources[specialKey] !== undefined) {
+              foundKey = specialKey;
+              foundOriginalKey = specialKey;
+              break;
+            }
+          }
+        }
+        
+        // Частичные совпадения
+        if (!foundKey) {
+          for (const [key, value] of Object.entries(userResources)) {
+            const keyNormalized = normalizeString(key);
+            if (keyNormalized.includes(materialNormalized) || materialNormalized.includes(keyNormalized)) {
+              foundKey = key;
+              foundOriginalKey = key;
+              break;
+            }
+          }
+        }
+      } else {
+        // Находим оригинальный ключ, если мы нашли нормализованный
+        for (const [key, value] of Object.entries(userResources)) {
+          if (normalizeString(key) === normalizeString(foundKey)) {
+            foundOriginalKey = key;
+            break;
+          }
+        }
+      }
+      
+      if (!foundKey || !foundOriginalKey) {
+        console.error(`[ModalModule] Не удалось найти материал ${materialId} в ресурсах пользователя`);
+        return false;
+      }
+      
+      // Отнимаем требуемое количество
+      const currentAmount = parseInt(userResources[foundOriginalKey]) || 0;
+      if (currentAmount < requiredAmount) {
+        console.error(`[ModalModule] Недостаточно материала ${materialId} (${foundOriginalKey}): ${currentAmount} < ${requiredAmount}`);
+        return false;
+      }
+      
+      console.log(`[ModalModule] Отнимаем ${requiredAmount} ${foundOriginalKey} (исходно ${materialId})`);
+      userResources[foundOriginalKey] = currentAmount - requiredAmount;
+    }
+    
+    // Добавляем крафтовый предмет в ресурсы
+    const craftedItemId = item.id || item.name;
+    if (userResources[craftedItemId] !== undefined) {
+      userResources[craftedItemId] = parseInt(userResources[craftedItemId]) + amount;
+    } else {
+      userResources[craftedItemId] = amount;
+    }
+    
+    console.log(`[ModalModule] Добавлен предмет ${craftedItemId} в количестве ${amount}`);
+    console.log('[ModalModule] Обновленные ресурсы:', userResources);
+    
+    // Сохраняем обновленные ресурсы
+    try {
+      // Используем IndexedDB, если доступно
+      if (window.IndexedDBModule && typeof window.IndexedDBModule.saveUserResources === 'function') {
+        await window.IndexedDBModule.saveUserResources(userResources);
+        console.log('[ModalModule] Ресурсы сохранены в IndexedDB');
+      } else if (window.saveResourcesToDatabase && typeof window.saveResourcesToDatabase === 'function') {
+        await window.saveResourcesToDatabase(userResources);
+        console.log('[ModalModule] Ресурсы сохранены через saveResourcesToDatabase');
+      } else {
+        // Резервный вариант - localStorage
+        localStorage.setItem('userResources', JSON.stringify(userResources));
+        console.log('[ModalModule] Ресурсы сохранены в localStorage');
+      }
+      
+      // Добавляем вызов функции удаления исчерпанных ресурсов
+      await deleteExhaustedResourcesFromIndexedDB(userResources);
+      
+      // Отправляем событие об обновлении ресурсов
+      document.dispatchEvent(new CustomEvent('resources-updated', { detail: userResources }));
+      
+      return true;
+  } catch (error) {
+      console.error('[ModalModule] Ошибка при сохранении ресурсов:', error);
+      return false;
+    }
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при крафте предмета:', error);
+    return false;
+  }
+};
+
+// Функция для проверки активных сессий крафта
+const checkActiveCraftingSessions = async () => {
+  try {
+    // Проверяем, находимся ли мы на странице крафта
+    const isCraftingPage = window.lastModalSource === 'crafting' || 
+                           document.querySelector('.crafting-container') || 
+                           window.location.hash === '#crafting' ||
+                           document.querySelector('.campfire-container') ||
+                           document.querySelector('.furnace-container');
+    // Если это не страница крафта, костра или печи, не выполняем проверку
+    if (!isCraftingPage) {
+      console.log('[ModalModule] Проверка активных сессий крафта пропущена (не страница крафта/костра/печи)');
+      return { success: true, message: 'Skipped - not on crafting/campfire/furnace page' };
+    }
+    
+    let telegramId;
+    
+    try {
+        // ИСПРАВЛЕНО: Безопасное получение telegramId через ensureTelegramId
+        if (typeof window.ensureTelegramId === 'function') {
+            telegramId = await window.ensureTelegramId(3, 500);
+            console.log(`[ModalModule] telegramId получен через ensureTelegramId: ${telegramId}`);
+        }
+        
+        // Fallback к старому методу если новая функция недоступна
+        if (!telegramId) {
+            // Try to get telegramId from Telegram WebApp first - с безопасными проверками
+            if (window.Telegram && window.Telegram.WebApp && 
+                window.Telegram.WebApp.initDataUnsafe && 
+                window.Telegram.WebApp.initDataUnsafe.user && 
+                window.Telegram.WebApp.initDataUnsafe.user.id) {
+                telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+                console.log(`[ModalModule] telegramId получен из Telegram WebApp (fallback): ${telegramId}`);
+            }
+            
+            // Fall back to localStorage only if necessary
+            if (!telegramId) {
+                telegramId = localStorage.getItem('telegramId');
+                if (telegramId) {
+                    console.log(`[ModalModule] telegramId получен из localStorage: ${telegramId}`);
+                }
+            }
+        }
+        
+        if (!telegramId) {
+            console.warn('[ModalModule] telegramId недоступен, пропуск проверки активных сессий');
+            return { success: false, error: 'telegramId not available' };
+        }
+        
+        // Fetch active crafting sessions from server
+        const response = await fetch(`rpg.php?action=getActiveCraftingSessions&telegramId=${telegramId}`);
+        
+        if (!response.ok) {
+            throw new Error(`Failed to fetch active crafting sessions: ${response.statusText}`);
+        }
+        
+        // Получаем текст ответа для анализа
+        const responseText = await response.text();
+        
+        // Проверяем, не является ли ответ HTML-кодом (признак ошибки PHP)
+        if (responseText.trim().startsWith('<') || responseText.includes('<!DOCTYPE html>')) {
+            return { success: false, error: 'Server returned HTML instead of JSON' };
+        }
+        
+        // Пробуем разобрать JSON
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch (jsonError) {
+            return { success: false, error: 'Invalid JSON response: ' + jsonError.message };
+        }
+        
+        if (!data.success) {
+            throw new Error(`Error fetching active crafting sessions: ${data.error || 'Unknown error'}`);
+        }
+        
+        const activeSessions = data.activeCraftingSessions || [];
+        const serverTime = data.serverTime || Math.floor(Date.now() / 1000);
+        
+        // ИСПРАВЛЕНО: Безопасная фильтрация активных сессий с проверкой существования свойств
+        const ongoingSessions = activeSessions.filter(session => 
+            session && 
+            session.status === 'active' && 
+            session.end_time && 
+            session.end_time > serverTime
+        );
+        
+        // Если есть активные сессии, отображаем их на странице крафта
+        if (ongoingSessions.length > 0) {
+            console.log(`[ModalModule] Найдено ${ongoingSessions.length} активных сессий крафта`);
+            
+            // Для каждой активной сессии отображаем таймер
+            for (const session of ongoingSessions) {
+                // ИСПРАВЛЕНО: Проверяем что все необходимые свойства существуют
+                if (!session || !session.id || !session.item_id || !session.end_time) {
+                    console.warn('[ModalModule] Пропуск некорректной активной сессии:', session);
+                    continue;
+                }
+                
+                // Если функция updateRecipeWithCraftingTimer доступна, используем её для отображения таймера
+                if (window.updateRecipeWithCraftingTimer && typeof window.updateRecipeWithCraftingTimer === 'function') {
+                    window.updateRecipeWithCraftingTimer(session.item_id, session.id, session.end_time);
+                    console.log(`[ModalModule] Отображен таймер для предмета ${session.item_id}, сессия ${session.id}`);
+                    
+                    // Показываем уведомление о продолжающемся крафте
+                    if (window.showNotification && session.item_name) {
+                        const remainingTime = Math.max(0, session.end_time - serverTime);
+                        const formattedTime = formatCraftTime(remainingTime);
+                        window.showNotification(`Crafting "${session.item_name}" in progress. Time left: ${formattedTime}`, 'info');
+                    }
+                }
+            }
+        }
+        
+        // ИСПРАВЛЕНО: Безопасная проверка завершенных сессий
+        const completedSessions = activeSessions.filter(session => 
+            session && session.id && session.end_time && (
+                (session.end_time <= serverTime && session.status === 'active') || 
+                (session.status === 'completed' && session.processed !== true)
+            )
+        );
+        
+        console.log(`[ModalModule] Найдено ${completedSessions.length} завершенных сессий крафта`);
+        
+        // Update completed sessions
+        for (const session of completedSessions) {
+            // ИСПРАВЛЕНО: Дополнительная проверка перед обработкой
+            if (!session || !session.id) {
+                console.warn('[ModalModule] Пропуск некорректной завершенной сессии:', session);
+                continue;
+            }
+            
+            console.log(`[ModalModule] Обработка завершенной сессии крафта ${session.id} для предмета ${session.item_id || 'unknown'}`);
+            
+            try {
+                // Вызываем updateCraftSessionStatus для каждой завершенной сессии,
+                // чтобы обновить её статус и начислить награду
+                await updateCraftSessionStatus(session.id);
+                
+                // Показываем уведомление о завершенном крафте
+                if (window.showNotification && session.item_name && session.quantity) {
+                    window.showNotification(`Crafting completed: ${session.quantity}x ${session.item_name} added to your inventory!`, 'success');
+                }
+            } catch (sessionError) {
+                console.error(`[ModalModule] Ошибка при обработке сессии ${session.id}:`, sessionError);
+                // Продолжаем обработку других сессий
+            }
+        }
+        
+        // After processing all sessions, cleanup completed sessions and refresh resources
+        await cleanupCompletedSessions(telegramId);
+        
+        // Ensure we have fresh resources from the database after all operations
+        await fetchUpdatedResources(telegramId);
+        
+        return { 
+            success: true, 
+            message: `Проверено ${activeSessions.length} сессий крафта, обработано ${completedSessions.length}` 
+        };
+    } catch (error) {
+        console.error('[ModalModule] Ошибка при проверке активных сессий:', error);
+        return { success: false, error: error.message };
+    }
+  } catch (error) {
+    console.error('[ModalModule] Критическая ошибка в checkActiveCraftingSessions:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Функция для удаления завершенных сессий
+const cleanupCompletedSessions = async (telegramId) => {
+  if (!telegramId) {
+    return false;
+  }
+  
+  try {
+    
+    
+    // Отправляем запрос на удаление всех завершенных сессий пользователя
+    const response = await fetch('rpg.php?action=cleanupCompletedSessions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        telegramId: telegramId
+      })
+    });
+    
+    if (!response.ok) {
+      return false;
+    }
+    
+    const result = await response.json();
+    
+    
+    if (result.success) {
+      
+      
+      // Обновляем ресурсы из БД после очистки сессий
+      if (result.deletedCount > 0) {
+        await fetchUpdatedResources(telegramId);
+      }
+      
+      return true;
+    } else {
+      return false;
+    }
+  } catch (error) {
+    // Empty catch block
+    return false;
+  }
+};
+
+// Инициализация модального окна для крафтинга
+const initializeCraftingModalIntegration = () => {
+  try {
+    // Проверяем, что модуль крафтинга уже загружен
+    if (!window.CraftingModule || typeof window.CraftingModule.initialize !== 'function') {
+    return false;
+  }
+  
+    // Инициализируем модальное окно и добавляем его в модуль крафтинга
+    initializeModal();
+    
+    // Регистрируем функцию обратного вызова для обновления модального окна
+    if (typeof window.CraftingModule.registerModalCallback === 'function') {
+      window.CraftingModule.registerModalCallback(showItemDetailsModal);
+    }
+    
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+// Initialize modal for crafting
+const initModalForCrafting = () => {
+  // Early return if already initialized
+  if (window._craftingModalInitialized) return true;
+  
+  // Initialize modal
+    initializeModal();
+    
+  // Регистрируем модальное окно в модуле крафтинга, если он доступен
+  if (window.CraftingModule && typeof window.CraftingModule.registerModalCallback === 'function') {
+    window.CraftingModule.registerModalCallback(showItemDetailsModal);
+    window._craftingModalInitialized = true;
+    return true;
+  }
+  
+  return false;
+};
+
+// Функция для синхронизации ресурсов с IndexedDB
+const syncResourcesWithIndexedDB = async () => {
+  try {
+    console.log('[ModalModule] Начало синхронизации данных с IndexedDB');
+    
+    // ИСПОЛЬЗУЕМ НАШУ НОВУЮ ФУНКЦИЮ ДЛЯ ГАРАНТИРОВАННОГО ПОЛУЧЕНИЯ TELEGRAMID
+    console.log('[ModalModule] Получение telegramId через ensureTelegramId...');
+    
+    let telegramId = null;
+    
+    // Проверяем, доступна ли глобальная функция ensureTelegramId
+    if (typeof window.ensureTelegramId === 'function') {
+      telegramId = await window.ensureTelegramId(5, 1000); // 5 попыток с интервалом 1 секунда
+      if (telegramId) {
+        console.log(`[ModalModule] ✅ telegramId получен через ensureTelegramId: ${telegramId}`);
+      }
+    }
+    
+    // Fallback к старому методу, если новая функция недоступна или не сработала
+    if (!telegramId) {
+      console.log('[ModalModule] Fallback к старому методу получения telegramId...');
+      
+      // Получаем ID пользователя старым методом
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && 
+          window.Telegram.WebApp.initDataUnsafe.user && window.Telegram.WebApp.initDataUnsafe.user.id) {
+        telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+        console.log(`[ModalModule] Telegram ID получен через fallback: ${telegramId}`);
+      }
+      
+      // Пробуем localStorage
+      if (!telegramId) {
+        telegramId = localStorage.getItem('telegramId');
+        if (telegramId) {
+          console.log(`[ModalModule] Telegram ID получен из localStorage: ${telegramId}`);
+        }
+      }
+    }
+    
+    if (!telegramId) {
+      console.error('[ModalModule] ❌ Telegram ID не найден даже после всех попыток, синхронизация отложена');
+      
+      // Отложенная попытка через 3 секунды
+      setTimeout(async () => {
+        console.log('[ModalModule] 🔄 Повторная попытка синхронизации через 3 секунды...');
+        await syncResourcesWithIndexedDB();
+      }, 3000);
+      
+      return false;
+    }
+    
+    // Сначала проверяем существование пользователя
+    console.log('[ModalModule] Проверка существования пользователя...');
+    try {
+      const checkResponse = await fetch('rpg.php?action=checkUser', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          telegramId: telegramId
+        })
+      });
+      
+      if (!checkResponse.ok) {
+        console.error(`[ModalModule] Ошибка HTTP при проверке пользователя: ${checkResponse.status} ${checkResponse.statusText}`);
+        return false;
+      }
+      
+      const checkData = await checkResponse.json();
+      console.log('[ModalModule] Результат проверки пользователя:', checkData);
+      
+      // Если пользователь не существует, ждем завершения его регистрации
+      if (!checkData.exists && (!checkData.data || !checkData.data.exists)) {
+        console.log('[ModalModule] Пользователь не найден в базе данных. Ожидание завершения регистрации...');
+        // Задержка перед повторной попыткой получения данных
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return false;
+      }
+    } catch (checkError) {
+      console.error('[ModalModule] Ошибка при проверке существования пользователя:', checkError);
+      return false;
+    }
+    
+    // Только если пользователь существует, получаем его данные
+    console.log('[ModalModule] Пользователь существует. Запрос данных с сервера...');
+    const response = await fetch('rpg.php?action=getUserData', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        telegramId: telegramId
+      })
+    });
+    
+    if (!response.ok) {
+      console.error(`[ModalModule] Ошибка HTTP: ${response.status} ${response.statusText}`);
+      return false;
+    }
+    
+    // Парсим ответ
+    const responseText = await response.text();
+    console.log('[ModalModule] Получен ответ от сервера, размер:', responseText.length);
+    
+    try {
+      const data = JSON.parse(responseText);
+      console.log('[ModalModule] Ответ успешно распарсен:', data);
+      
+      if (!data.success) {
+        console.error('[ModalModule] Сервер вернул ошибку:', data.message || 'Неизвестная ошибка');
+      return false;
+    }
+    
+      // Получаем данные пользователя
+      if (data.userData) {
+        console.log('[ModalModule] Данные пользователя получены:', data.userData);
+        
+        // Обновляем информацию о крафтовых установках
+        updateCraftingInstallations(data.userData);
+        
+        // Получаем и сохраняем уровень персонажа
+        if (data.userData.level !== undefined) {
+          console.log(`[ModalModule] Получен уровень персонажа из БД: ${data.userData.level}`);
+          playerLevel = data.userData.level;
+          // Сохраняем уровень персонажа в глобальную переменную
+          window.playerLevel = data.userData.level;
+          console.log(`[ModalModule] Уровень персонажа сохранен в глобальной переменной: ${window.playerLevel}`);
+        } else {
+          console.warn('[ModalModule] Уровень персонажа отсутствует в данных с сервера');
+        }
+        
+        // Создаем объект для хранения всех ресурсов
+        let combinedResources = {};
+        
+        // Получаем ресурсы
+        if (data.userData.resources) {
+          console.log(`[ModalModule] Получены обновленные ресурсы из БД:`, data.userData.resources);
+          // Добавляем ресурсы в общий объект
+          combinedResources = { ...combinedResources, ...data.userData.resources };
+        }
+        
+        // Проверяем, есть ли предметы в inventory
+        if (data.userData.inventory) {
+          console.log('[ModalModule] Найдены предметы в inventory:', data.userData.inventory);
+          
+          // Проверяем формат inventory
+          if (typeof data.userData.inventory === 'object' && !Array.isArray(data.userData.inventory)) {
+            console.log('[ModalModule] Обработка inventory в формате объекта');
+            
+            // Обрабатываем inventory как объект {itemId: {quantity: value, name: string}}
+            for (const [itemId, itemData] of Object.entries(data.userData.inventory)) {
+              if (itemId && itemData) {
+                if (typeof itemData === 'object' && itemData.quantity !== undefined) {
+                  // Если itemData - объект с полем quantity
+                  combinedResources[itemId] = parseInt(itemData.quantity) || 0;
+                  console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${combinedResources[itemId]} (из объекта с полем quantity)`);
+                } else {
+                  // Если itemData напрямую содержит количество
+                  combinedResources[itemId] = parseInt(itemData) || 0;
+                  console.log(`[ModalModule] Добавлен предмет из inventory: ${itemId} = ${combinedResources[itemId]} (прямое значение)`);
+                }
+              }
+            }
+          } else if (Array.isArray(data.userData.inventory)) {
+            console.log('[ModalModule] Обработка inventory в формате массива');
+            
+            // Обрабатываем inventory как массив {id: itemId, quantity: value}
+            data.userData.inventory.forEach(item => {
+              if (item && item.id) {
+                combinedResources[item.id] = parseInt(item.quantity || item.qty || 0);
+                console.log(`[ModalModule] Добавлен предмет из inventory: ${item.id} = ${combinedResources[item.id]}`);
+              }
+            });
+          }
+        }
+        
+        // Обновляем глобальную переменную объединенными ресурсами
+        window.globalUserResources = {...combinedResources};
+        
+        // Обновляем ресурсы в модальном модуле
+        userResources = {...combinedResources};
+        
+        console.log('[ModalModule] Итоговые ресурсы после объединения:', combinedResources);
+        
+        // Конвертируем объект ресурсов в массив предметов для IndexedDB
+        const inventoryItems = [];
+        for (const [id, quantity] of Object.entries(combinedResources)) {
+          // Пропускаем служебные поля и нулевые значения
+          if (id === 'telegramId' || id === 'id' || id === 'lastUpdated' || !quantity) continue;
+          
+          // Создаем объект предмета в формате для IndexedDB
+          const itemName = id.charAt(0).toUpperCase() + id.slice(1).replace(/_/g, ' ');
+          const inventoryItem = {
+            id: id,
+            name: itemName,
+            quantity: parseInt(quantity) || 0,
+            rarity: 'Common', // Можно улучшить определение редкости
+            updated: new Date().toISOString()
+          };
+          
+          inventoryItems.push(inventoryItem);
+        }
+        
+        console.log(`[ModalModule] Подготовлено ${inventoryItems.length} предметов для сохранения в IndexedDB`);
+        
+        // Сохраняем каждый предмет в IndexedDB
+        if (window.IndexedDBModule && typeof window.IndexedDBModule.updateInventoryItem === 'function') {
+          console.log('[ModalModule] Начало сохранения предметов в IndexedDB...');
+          let savedCount = 0;
+          
+          for (const item of inventoryItems) {
+            try {
+              await window.IndexedDBModule.updateInventoryItem(item.id, item);
+              savedCount++;
+            } catch (err) {
+              console.error(`[ModalModule] Ошибка при сохранении предмета ${item.id} в IndexedDB:`, err);
+            }
+          }
+          
+          console.log(`[ModalModule] Синхронизация инвентаря с IndexedDB завершена. Сохранено ${savedCount}/${inventoryItems.length} предметов`);
+          
+          // Также сохраняем уровень персонажа в IndexedDB
+          if (window.IndexedDBModule && typeof window.IndexedDBModule.saveUserData === 'function') {
+            try {
+              console.log(`[ModalModule] Сохранение уровня персонажа ${playerLevel} в IndexedDB...`);
+              const userData = {
+                level: playerLevel
+              };
+              console.log('[ModalModule] Данные для сохранения:', userData);
+              
+              await window.IndexedDBModule.saveUserData(userData);
+              console.log(`[ModalModule] Уровень персонажа успешно сохранен в IndexedDB: ${playerLevel}`);
+              
+              // Проверим, что данные действительно сохранились
+              if (window.IndexedDBModule && typeof window.IndexedDBModule.getUserData === 'function') {
+                try {
+                  const savedData = await window.IndexedDBModule.getUserData();
+                  console.log('[ModalModule] Проверка сохраненных данных в IndexedDB:', savedData);
+                  if (savedData && savedData.level) {
+                    console.log(`[ModalModule] Подтверждено: уровень персонажа в IndexedDB = ${savedData.level}`);
+                  } else {
+                    console.warn('[ModalModule] Уровень не найден в сохраненных данных!');
+                  }
+                } catch (checkErr) {
+                  console.error('[ModalModule] Ошибка при проверке сохраненных данных:', checkErr);
+                }
+              }
+            } catch (levelErr) {
+              console.error('[ModalModule] Ошибка при сохранении уровня персонажа в IndexedDB:', levelErr);
+              console.error('[ModalModule] Трассировка ошибки:', levelErr.stack);
+            }
+          } else {
+            console.warn('[ModalModule] Функция saveUserData недоступна в IndexedDBModule');
+            if (window.IndexedDBModule) {
+              console.log('Доступные методы IndexedDBModule:', Object.keys(window.IndexedDBModule));
+            }
+          }
+          
+          return true;
+        } else {
+          console.error('[ModalModule] IndexedDBModule или функция updateInventoryItem недоступны');
+          return false;
+        }
+      } else {
+        console.error('[ModalModule] Данные пользователя отсутствуют в ответе сервера');
+        return false;
+      }
+    } catch (jsonError) {
+      console.error('[ModalModule] Ошибка при парсинге JSON ответа:', jsonError);
+      console.error('[ModalModule] Текст ответа:', responseText.substring(0, 200) + '...');
+      return false;
+    }
+  } catch (error) {
+    console.error('[ModalModule] Общая ошибка при синхронизации с IndexedDB:', error);
+    console.error('[ModalModule] Трассировка ошибки:', error.stack);
+    return false;
+  }
+};
+
+// Обновляем инициализацию модуля, чтобы включить синхронизацию
+const initModule = async () => {
+  console.log('[ModalModule] Начинаем инициализацию модуля...');
+  
+  // ЖДЕМ ГОТОВНОСТИ INDEXEDDB
+  console.log('[ModalModule] Ожидание готовности IndexedDB...');
+  let indexedDBReady = false;
+  let attempts = 0;
+  const maxAttempts = 10;
+  
+  while (!indexedDBReady && attempts < maxAttempts) {
+    attempts++;
+    console.log(`[ModalModule] Проверка IndexedDB, попытка ${attempts}/${maxAttempts}`);
+    
+    if (window.IndexedDBModule && window.IndexedDBModule.db) {
+      indexedDBReady = true;
+      console.log('[ModalModule] ✅ IndexedDB готов');
+    } else {
+      console.log('[ModalModule] ⏳ IndexedDB не готов, ожидание 1 секунду...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  if (!indexedDBReady) {
+    console.warn('[ModalModule] ⚠️ IndexedDB не готов после всех попыток, продолжаем инициализацию');
+  }
+  
+  // ЖДЕМ TELEGRAMID
+  console.log('[ModalModule] Проверка доступности telegramId...');
+  if (typeof window.ensureTelegramId === 'function') {
+    const telegramId = await window.ensureTelegramId(3, 1000);
+    if (telegramId) {
+      console.log(`[ModalModule] ✅ telegramId подтвержден: ${telegramId}`);
+    } else {
+      console.warn('[ModalModule] ⚠️ telegramId недоступен, но продолжаем инициализацию');
+    }
+  }
+  
+  // Синхронизируем ресурсы с IndexedDB при загрузке модуля
+  console.log('[ModalModule] Начинаем синхронизацию ресурсов...');
+  await syncResourcesWithIndexedDB();
+  
+  // НЕ проверяем активные сессии крафта при инициализации модуля,
+  // это будет делаться только при событии crafting-page-opened
+  
+  // Отладка хранилищ
+  console.log('[ModalModule] Отладка хранилищ...');
+  await debugStorages();
+  
+  console.log('[ModalModule] ✅ Инициализация модуля завершена');
+  
+  return {
+    // Экспортируем публичные методы модуля
+    showItemDetailsModal,
+    closeModal,
+    refreshResourcesAfterCraft,
+    syncResourcesWithIndexedDB,
+    getPlayerLevel,
+    checkActiveCraftingSessions
+  };
+};
+
+// Экспортируем модуль в глобальную область видимости
+window.ModalModule = {
+  showItemDetailsModal,
+  hideModal,
+  closeModal,
+  showNotification: window.showNotification,
+  refreshResourcesAfterCraft,
+  syncResourcesWithIndexedDB,
+  loadUserResources,
+  craftAndUpdateInventory,
+  getPlayerLevel, // Добавляем метод получения уровня персонажа
+  checkPlayerLevelStorages, // Метод для проверки хранилищ уровня
+  loadSpecialResourcesFromIndexedDB, // Добавляем метод загрузки специальных ресурсов
+  checkActiveCraftingSessions,  // Добавляем функцию проверки активных сессий
+  initCraftingSessionsChecker: () => { 
+    if (typeof window.checkActiveCraftingSessions === 'function') {
+      return window.checkActiveCraftingSessions();
+    }
+    return checkActiveCraftingSessions();
+  },
+  initializeModalSystem: () => {
+    
+    // Инициализируем модальное окно
+    initializeModal();
+    // Синхронизируем ресурсы при инициализации
+    syncResourcesWithIndexedDB().then(success => {
+      if (success) {
+        console.log('[ModalModule] Синхронизация ресурсов выполнена при инициализации модальной системы');
+        
+        // НЕ проверяем активные сессии крафта после синхронизации ресурсов,
+        // это будет делаться только при событии crafting-page-opened
+      } else {
+      }
+    });
+    return true;
+  },
+  checkCraftingInstallation,
+  updateCraftingInstallations,
+};
+
+// Функция для отображения всплывающих уведомлений
+window.showNotification = (message, type = 'info', duration = 3000) => {
+  try {
+    
+    
+    // Создаем элемент уведомления
+    const notification = document.createElement('div');
+    notification.className = `rpg-notification notification-${type}`;
+    notification.innerHTML = message;
+    
+    // Стили для уведомления
+    notification.style.position = 'fixed';
+    notification.style.bottom = '20px';
+    notification.style.right = '20px';
+    notification.style.padding = '12px 20px';
+    notification.style.borderRadius = '8px';
+    notification.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
+    notification.style.zIndex = '10000';
+    notification.style.minWidth = '250px';
+    notification.style.maxWidth = '80%';
+    notification.style.transition = 'all 0.3s ease-in-out';
+    notification.style.opacity = '0';
+    notification.style.transform = 'translateY(20px)';
+    
+    // Установка стилей в зависимости от типа уведомления
+    switch (type) {
+      case 'success':
+        notification.style.backgroundColor = '#4CAF50';
+        notification.style.color = '#fff';
+        notification.style.border = '1px solid #43A047';
+        break;
+      case 'error':
+        notification.style.backgroundColor = '#F44336';
+        notification.style.color = '#fff';
+        notification.style.border = '1px solid #D32F2F';
+        break;
+      case 'warning':
+        notification.style.backgroundColor = '#FF9800';
+        notification.style.color = '#fff';
+        notification.style.border = '1px solid #F57C00';
+        break;
+      default: // info
+        notification.style.backgroundColor = '#2196F3';
+        notification.style.color = '#fff';
+        notification.style.border = '1px solid #1976D2';
+    }
+    
+    // Добавляем на страницу
+    document.body.appendChild(notification);
+    
+    // Анимация появления
+    setTimeout(() => {
+      notification.style.opacity = '1';
+      notification.style.transform = 'translateY(0)';
+    }, 10);
+    
+    // Автоматическое закрытие через 5 секунд
+    setTimeout(() => {
+      notification.style.opacity = '0';
+      notification.style.transform = 'translateY(20px)';
+      
+      // Удаление элемента после завершения анимации
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.parentNode.removeChild(notification);
+        }
+      }, 300);
+    }, 5000);
+  } catch (error) {
+    // Empty catch block
+  }
+};
+
+// Запускаем синхронизацию ресурсов при загрузке модуля
+document.addEventListener('DOMContentLoaded', async () => {
+  console.log('[ModalModule] DOMContentLoaded - начинаем инициализацию...');
+  
+  // ЗАДЕРЖКА ДЛЯ ОЖИДАНИЯ INDEXEDDB И TELEGRAMID
+  console.log('[ModalModule] Ожидание 2 секунды для инициализации IndexedDB...');
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  const success = await syncResourcesWithIndexedDB();
+  if (success) {
+    console.log('[ModalModule] ✅ Синхронизация успешна');
+    window.showNotification('Ресурсы синхронизированы с IndexedDB', 'success');
+    
+    // НЕ проверяем активные сессии крафта после синхронизации ресурсов на любой странице,
+    // это будет делаться только на странице крафта через событие crafting-page-opened
+  } else {
+    console.warn('[ModalModule] ⚠️ Синхронизация не удалась');
+    window.showNotification('Ошибка синхронизации ресурсов', 'error');
+  }
+});
+
+// Добавляем обработчик события открытия страницы крафта
+document.addEventListener('crafting-page-opened', async () => {
+  console.log('[ModalModule] Обнаружено открытие страницы крафта, проверяем активные сессии...');
+  
+  try {
+    // Вызываем функцию проверки активных сессий крафта
+    const result = await checkActiveCraftingSessions();
+    if (result && result.success) {
+      console.log('[ModalModule] Проверка активных сессий крафта выполнена:', result.message);
+    } else if (result) {
+      console.warn('[ModalModule] Ошибка при проверке активных сессий крафта:', result.error);
+    }
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при обработке события открытия страницы крафта:', error);
+  }
+});
+
+// Функция для обновления интерфейса рецепта с таймером крафта
+window.updateRecipeWithCraftingTimer = function(itemId, sessionId, endTime) {
+  try {
+    // Находим элемент рецепта на странице
+    const recipeElement = document.querySelector(`.recipe-item[data-recipe-id="${itemId}"]`);
+    if (!recipeElement) {
+      return false;
+    }
+    
+    // Добавляем класс "активного крафта" для визуального выделения
+    recipeElement.classList.add('crafting-in-progress');
+    
+    // Создаем или находим элемент для отображения таймера
+    let timerElement = recipeElement.querySelector('.craft-timer-overlay');
+    if (!timerElement) {
+      timerElement = document.createElement('div');
+      timerElement.className = 'craft-timer-overlay';
+      timerElement.setAttribute('data-session-id', sessionId);
+      
+      // Создаем HTML-структуру таймера с использованием CSS-классов вместо инлайн-стилей
+      timerElement.innerHTML = `
+        <div class="craft-timer-text"></div>
+        <div class="craft-timer-progress">
+          <div class="craft-timer-progress-bar" style="width: 0%"></div>
+        </div>
+      `;
+      
+      // Добавляем таймер к элементу рецепта
+      recipeElement.style.position = 'relative';
+      recipeElement.appendChild(timerElement);
+    }
+    
+    // Находим элементы таймера и прогресс-бара
+    const timeRemainingElement = timerElement.querySelector('.craft-timer-text');
+    const progressFillElement = timerElement.querySelector('.craft-timer-progress-bar');
+    
+    // === ОЧИСТКА ПРЕДЫДУЩЕГО ТАЙМЕРА ===
+    const prevTimerId = timerElement.getAttribute('data-timer-id');
+    if (prevTimerId) {
+      clearInterval(Number(prevTimerId));
+      timerElement.removeAttribute('data-timer-id');
+    }
+    // === КОНЕЦ ОЧИСТКИ ===
+
+    // Устанавливаем начальное значение
+    let currentTime = Math.floor(Date.now() / 1000);
+    const timeRemaining = Math.max(0, endTime - currentTime);
+    
+    if (timeRemaining > 0) {
+      // Форматируем оставшееся время
+      const minutes = Math.floor(timeRemaining / 60);
+      const seconds = timeRemaining % 60;
+      timeRemainingElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+      
+      // Если у элемента есть data-total-time (общее время крафта), используем его для расчета прогресса
+      // Иначе берем оставшееся время как 100%
+      const totalTime = parseInt(recipeElement.getAttribute('data-craft-time')) || timeRemaining;
+      const progress = Math.min(100, Math.max(0, Math.round(((totalTime - timeRemaining) / totalTime) * 100)));
+      
+      progressFillElement.style.width = `${progress}%`;
+      
+      // Запускаем таймер обновления
+      const timerId = setInterval(() => {
+        const now = Math.floor(Date.now() / 1000);
+        const remaining = Math.max(0, endTime - now);
+        
+        if (remaining <= 0) {
+          // Крафт завершен
+          clearInterval(timerId);
+          
+          // Больше не показываем текст "Crafted!", просто обновляем прогресс-бар до 100%
+          timeRemainingElement.textContent = ''; // Пустой текст вместо "Crafted!"
+          progressFillElement.style.width = '100%';
+          progressFillElement.style.backgroundColor = '#4caf50'; // Зеленый цвет для завершенного крафта
+          
+          // Проверяем и обновляем статус сессии в БД
+          updateCraftSessionStatus(sessionId);
+          
+          // Через 2 секунды удаляем оверлей (сокращаем время с 3 до 2 секунд)
+          setTimeout(() => {
+            recipeElement.classList.remove('crafting-in-progress');
+            if (timerElement && timerElement.parentNode) {
+              timerElement.parentNode.removeChild(timerElement);
+            }
+          }, 2000);
+          
+          // Показываем уведомление о завершении
+          if (window.showNotification) {
+            const nameElement = recipeElement.querySelector('.recipe-name');
+            const recipeName = nameElement ? nameElement.textContent : itemId;
+            window.showNotification(`Crafting of ${recipeName} completed!`, 'success');
+          }
+          
+          // Обновляем интерфейс
+          if (typeof window.refreshCraftingUI === 'function') {
+            window.refreshCraftingUI();
+          }
+        } else {
+          // Обновляем отображение таймера
+          const min = Math.floor(remaining / 60);
+          const sec = remaining % 60;
+          timeRemainingElement.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+          
+          // Обновляем прогресс-бар
+          const totalTime = parseInt(recipeElement.getAttribute('data-craft-time')) || (endTime - currentTime);
+          const newProgress = Math.min(100, Math.max(0, Math.round(((totalTime - remaining) / totalTime) * 100)));
+          progressFillElement.style.width = `${newProgress}%`;
+        }
+      }, 1000);
+      
+      // Сохраняем ID таймера в атрибуте, чтобы можно было его остановить при необходимости
+      timerElement.setAttribute('data-timer-id', timerId);
+    } else {
+      // Если время уже истекло, не показываем текст "Crafted!", только прогресс-бар
+      timeRemainingElement.textContent = '';
+      progressFillElement.style.width = '100%';
+      progressFillElement.style.backgroundColor = '#4caf50';
+      
+      // Проверяем и обновляем статус сессии в БД
+      updateCraftSessionStatus(sessionId);
+      
+      // Через 2 секунды удаляем оверлей
+      setTimeout(() => {
+        recipeElement.classList.remove('crafting-in-progress');
+        if (timerElement && timerElement.parentNode) {
+          timerElement.parentNode.removeChild(timerElement);
+        }
+      }, 2000);
+    }
+    
+    return true;
+  } catch (error) {
+    // Empty catch block
+    return false;
+  }
+};
+
+// Функция для обновления статуса сессии крафта в БД
+async function updateCraftSessionStatus(sessionId) {
+  if (!sessionId) {
+    console.log('[ModalModule] Не указан sessionId для обновления статуса');
+    return false;
+  }
+  
+  try {
+    console.log('[ModalModule] Обновление статуса сессии крафта:', sessionId);
+    
+    // ИСПРАВЛЕНО: Безопасное получение ID пользователя
+    const telegramId = localStorage.getItem('rpg_telegram_id') || 
+      localStorage.getItem('telegramId') ||
+      (window.Telegram && window.Telegram.WebApp && 
+       window.Telegram.WebApp.initDataUnsafe && 
+       window.Telegram.WebApp.initDataUnsafe.user && 
+       window.Telegram.WebApp.initDataUnsafe.user.id ? 
+       window.Telegram.WebApp.initDataUnsafe.user.id : null);
+    
+    if (!telegramId) {
+      console.log('[ModalModule] Не удалось определить ID пользователя');
+      return false;
+    }
+    
+    // Для отладки - сохраним sessionId, который клиент пытается обновить
+    const logSessionId = sessionId;
+    console.log(`[ModalModule] Попытка обновления сессии ${logSessionId} для пользователя ${telegramId}`);
+    
+    // Сначала получим данные о сессии, чтобы узнать, какой предмет добавить в инвентарь
+    const sessionResponse = await fetch(`rpg.php?action=getCraftingSession&sessionId=${sessionId}&telegramId=${telegramId}`);
+    
+    if (!sessionResponse.ok) {
+      console.log('[ModalModule] Ошибка HTTP при получении данных сессии:', sessionResponse.status);
+      return false;
+    }
+    
+    const sessionData = await sessionResponse.json();
+    console.log('[ModalModule] Получены данные сессии:', sessionData);
+    
+    if (sessionData.success && sessionData.session) {
+      const session = sessionData.session;
+      
+      // Отправляем запрос на обновление статуса сессии
+      const updateResponse = await fetch('rpg.php?action=updateCraftingSession', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: sessionId,
+          status: 'completed',
+          telegramId: telegramId,
+          logSessionId: logSessionId // Для отладки - сохраняем оригинальный sessionId
+        })
+      });
+      
+      if (!updateResponse.ok) {
+        console.log('[ModalModule] Ошибка HTTP при обновлении сессии:', updateResponse.status);
+        return false;
+      }
+      
+      // Получаем данные о созданном предмете из сессии
+      const craftedItemId = session.item_id;
+      const craftedItemName = session.item_name;
+      const craftedQuantity = parseInt(session.quantity) || 1;
+      
+      // Проверяем, есть ли для этого предмета рецепт с полем result
+      let finalQuantity = craftedQuantity;
+      let craftResults = {};
+      
+      if (window.CraftingRecipes && typeof window.CraftingRecipes.getRecipeById === 'function') {
+        const recipe = window.CraftingRecipes.getRecipeById(craftedItemId);
+        
+        if (recipe && recipe.result) {
+          console.log('[ModalModule] Найден рецепт с полем result:', recipe);
+          
+          // Создаем объект с результатами крафта на основе поля result
+          for (const [resultItemId, resultQuantity] of Object.entries(recipe.result)) {
+            const totalResultQuantity = resultQuantity * craftedQuantity;
+            console.log(`[ModalModule] Добавляем результат крафта: ${resultItemId} x ${totalResultQuantity}`);
+            craftResults[resultItemId] = totalResultQuantity;
+          }
+        } else {
+          // Если у рецепта нет поля result, используем стандартную логику
+          craftResults[craftedItemId] = craftedQuantity;
+        }
+      } else {
+        // Если нет доступа к рецептам, используем стандартную логику
+        craftResults[craftedItemId] = craftedQuantity;
+      }
+      
+      console.log('[ModalModule] Обновление инвентаря для предметов:', craftResults);
+      
+      try {
+        // Разделяем предметы на ресурсные и обычные
+        const inventoryItems = {};
+        const resourceItems = {};
+        
+        for (const [itemId, quantity] of Object.entries(craftResults)) {
+          if (isResourceItem(itemId)) {
+            resourceItems[itemId] = quantity;
+          } else {
+            inventoryItems[itemId] = quantity;
+          }
+        }
+        
+        console.log('[ModalModule] Предметы для инвентаря:', inventoryItems);
+        console.log('[ModalModule] Предметы для ресурсов:', resourceItems);
+        
+        // Обновляем ресурсы напрямую
+        if (Object.keys(resourceItems).length > 0) {
+          console.log('[ModalModule] Обновляем ресурсы напрямую:', resourceItems);
+          
+          // Обновляем локальные ресурсы
+          let currentResources = window.globalUserResources || {};
+          
+          for (const [itemId, quantity] of Object.entries(resourceItems)) {
+            if (currentResources[itemId] !== undefined) {
+              currentResources[itemId] = Number(currentResources[itemId]) + Number(quantity);
+            } else {
+              currentResources[itemId] = Number(quantity);
+            }
+          }
+          
+          // Сохраняем только в глобальной переменной для совместимости
+          window.globalUserResources = {...currentResources};
+          
+          // Обновляем ресурсы в IndexedDB
+          if (window.IndexedDBModule && typeof window.IndexedDBModule.saveResources === 'function') {
+            await window.IndexedDBModule.saveResources(currentResources);
+          }
+          
+          // Отправляем запрос на обновление ресурсов на сервере
+          const resourceUpdateResponse = await fetch('rpg.php?action=updateResources', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              telegramId: telegramId,
+              resources: resourceItems
+            })
+          });
+          
+          if (!resourceUpdateResponse.ok) {
+            console.log('[ModalModule] Ошибка HTTP при обновлении ресурсов:', resourceUpdateResponse.status);
+          } else {
+            console.log('[ModalModule] Ресурсы успешно обновлены на сервере');
+          }
+        }
+        
+        // Обрабатываем только обычные предметы для инвентаря
+        if (Object.keys(inventoryItems).length > 0) {
+          // Проверяем наличие модуля IndexedDB
+          if (window.IndexedDBModule) {
+            // Обновляем предметы в IndexedDB
+            for (const [itemId, quantity] of Object.entries(inventoryItems)) {
+              // Получаем название предмета (для других предметов, кроме основного)
+              let itemName = itemId === craftedItemId ? craftedItemName : itemId;
+              
+              // Если это другой предмет, пытаемся получить его имя из каталога предметов
+              if (itemId !== craftedItemId && window.ItemCatalogModule && typeof window.ItemCatalogModule.findCatalogItemById === 'function') {
+                const catalogItem = window.ItemCatalogModule.findCatalogItemById(itemId);
+                if (catalogItem && catalogItem.name) {
+                  itemName = catalogItem.name;
+                }
+              }
+              
+              await window.IndexedDBModule.updateInventoryItem(itemId, {
+                name: itemName,
+                quantity: quantity
+              });
+              
+              console.log(`[ModalModule] Предмет ${itemId} (${quantity} шт.) успешно добавлен в IndexedDB`);
+            }
+            
+            // Создаем инвентарь в нужном формате для сервера
+            console.log('[ModalModule] Отправляем инвентарь на сервер:', inventoryItems);
+            
+            // Отправляем обновленный инвентарь на сервер
+            const inventoryUpdateResponse = await fetch('rpg.php?action=updateUserInventory', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                telegramId: telegramId,
+                inventory: inventoryItems
+              })
+            });
+            
+            if (!inventoryUpdateResponse.ok) {
+              console.log('[ModalModule] Ошибка HTTP при обновлении инвентаря на сервере:', inventoryUpdateResponse.status);
+              
+              // Пробуем повторить с другим форматом
+              const alternativeInventory = Object.entries(inventoryItems).map(([itemId, quantity]) => ({
+                itemId,
+                quantity
+              }));
+              
+              const rawResponse = await fetch('rpg.php?action=updateInventory', {
+                method: 'POST', 
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  telegramId: telegramId,
+                  inventory: alternativeInventory
+                })
+              });
+              
+              if (!rawResponse.ok) {
+                console.log('[ModalModule] Повторная ошибка при обновлении инвентаря:', rawResponse.status);
+              } else {
+                console.log('[ModalModule] Инвентарь успешно обновлен через альтернативный метод');
+              }
+            } else {
+              console.log('[ModalModule] Инвентарь успешно обновлен на сервере');
+            }
+          } else {
+            console.log('[ModalModule] Модуль IndexedDB не доступен, пробуем обновить инвентарь напрямую на сервере');
+            
+            // Отправляем запрос на добавление предметов напрямую на сервер
+            const directUpdateResponse = await fetch('rpg.php?action=updateUserInventory', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                telegramId: telegramId,
+                inventory: inventoryItems
+              })
+            });
+            
+            if (!directUpdateResponse.ok) {
+              console.log('[ModalModule] Ошибка HTTP при прямом обновлении инвентаря:', directUpdateResponse.status);
+              
+              // Пробуем с другим форматом
+              const alternativeInventory = Object.entries(inventoryItems).map(([itemId, quantity]) => ({
+                itemId,
+                quantity
+              }));
+              
+              const rawResponse = await fetch('rpg.php?action=updateInventory', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  telegramId: telegramId,
+                  inventory: alternativeInventory
+                })
+              });
+              
+              if (!rawResponse.ok) {
+                console.log('[ModalModule] Повторная ошибка при обновлении инвентаря:', rawResponse.status);
+              } else {
+                console.log('[ModalModule] Инвентарь успешно обновлен через альтернативный метод');
+              }
+            } else {
+              console.log('[ModalModule] Инвентарь успешно обновлен напрямую на сервере');
+            }
+          }
+        }
+        
+        // Вызываем обновление UI компонентов, если доступно
+        if (window.InventoryModule && typeof window.InventoryModule.refreshInventoryDisplay === 'function') {
+          window.InventoryModule.refreshInventoryDisplay();
+        }
+        
+        // Вызываем полное обновление ресурсов и интерфейса
+        await refreshResourcesAfterCraft();
+        
+        // Дополнительно вызываем функции обновления из CraftingModule
+        if (window.CraftingModule) {
+          if (typeof window.CraftingModule.refreshInventory === 'function') {
+            console.log('[ModalModule] Вызов CraftingModule.refreshInventory');
+            await window.CraftingModule.refreshInventory();
+          }
+          
+          if (typeof window.CraftingModule.loadResources === 'function') {
+            console.log('[ModalModule] Вызов CraftingModule.loadResources');
+            await window.CraftingModule.loadResources();
+          }
+        }
+        
+        // Отправляем событие, чтобы другие модули могли обновиться
+        const inventoryUpdatedEvent = new CustomEvent('inventoryUpdated', { 
+          detail: { 
+            items: craftResults,
+            timestamp: Date.now() 
+          } 
+        });
+        window.dispatchEvent(inventoryUpdatedEvent);
+        
+        return true;
+      } catch (dbError) {
+        console.log('[ModalModule] Ошибка при обновлении инвентаря:', dbError.message);
+        return false;
+      }
+    }
+    
+    console.log('[ModalModule] Статус сессии обновлен успешно');
+    return true;
+  } catch (error) {
+    // Общий обработчик ошибок для всех операций
+    if (error.name === 'ReactError') {
+      console.log('[ModalModule] Ошибка при обновлении React компонентов:', error.message);
+    } else if (error.name === 'InventoryError') {
+      console.log('[ModalModule] Ошибка при обновлении инвентаря:', error.message);
+    } else {
+      console.log('[ModalModule] Общая ошибка в updateCraftSessionStatus:', error.message);
+    }
+    return false;
+  }
+} 
+
+// Функция для отладки хранилищ
+const debugStorages = async () => {
+  
+  
+  // Вывод данных из localStorage
+  
+  try {
+    const localStorageResources = localStorage.getItem('userResources');
+    
+    
+    const localInventory = localStorage.getItem('userInventory');
+    
+  } catch (error) {
+  }
+  
+  // Вывод данных из IndexedDB
+  
+  try {
+    const telegramId = localStorage.getItem('telegramId');
+    if (!telegramId) {
+      
+      return;
+    }
+    
+    const db = await openDatabase();
+    const transaction = db.transaction(['resources'], 'readonly');
+    const store = transaction.objectStore('resources');
+    const resourcesRequest = store.get(telegramId);
+    
+    resourcesRequest.onsuccess = (event) => {
+      
+    };
+    
+    resourcesRequest.onerror = (error) => {
+    };
+  } catch (error) {
+  }
+  
+  
+};
+
+// Function to refresh inventory display after changes
+const forceReactComponentsUpdate = async () => {
+  // Implementation goes here
+  // This is just a stub to fix the linter error
+  if (window.InventoryModule && typeof window.InventoryModule.forceUpdate === 'function') {
+    return await window.InventoryModule.forceUpdate();
+  }
+  return false;
+};
+
+// Функция для сохранения ресурсов пользователя в инвентарь (inventory) в rpgDatabase
+const saveResourcesToIndexedDB = async (resources) => {
+  try {
+    // Получаем telegramId (по возможности)
+    let telegramId;
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && 
+        window.Telegram.WebApp.initDataUnsafe.user && window.Telegram.WebApp.initDataUnsafe.user.id) {
+      telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+    } else {
+      telegramId = localStorage.getItem('telegramId');
+    }
+
+    // Используем прямую функцию для сохранения в inventory
+    await saveResourcesDirectlyToIndexedDB(resources);
+
+    // Также сохраняем в глобальной переменной для доступа из других модулей
+    window.globalUserResources = JSON.parse(JSON.stringify(resources));
+    
+    // Отправляем событие об обновлении ресурсов
+    window.dispatchEvent(new CustomEvent('resourcesUpdated', { 
+      detail: { resources: resources, timestamp: Date.now() } 
+    }));
+    
+    // Обновляем компоненты React
+    if (window.InventoryModule && typeof window.InventoryModule.refreshReactComponents === 'function') {
+      window.InventoryModule.refreshReactComponents();
+    }
+
+    // Синхронизируем изменения с сервером, если есть соединение
+    try {
+      if (telegramId) {
+        // Обновляем ресурсы на сервере
+        const serverResponse = await fetch('rpg.php?action=updateResources', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            telegramId: telegramId,
+            resources: resources
+          })
+        });
+
+        if (serverResponse.ok) {
+          console.log('[ModalModule] Ресурсы успешно синхронизированы с сервером');
+        }
+      }
+    } catch (syncError) {
+      console.error('[ModalModule] Ошибка при синхронизации ресурсов с сервером:', syncError.message);
+      // Не прерываем выполнение, даже если синхронизация не удалась
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при сохранении ресурсов в IndexedDB:', error.message);
+    return false;
+  }
+};
+
+// Функция для сохранения ресурсов в inventory в rpgDatabase вместо отдельной таблицы
+
+// ДОПОЛНИТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ПРИНУДИТЕЛЬНОГО ОБНОВЛЕНИЯ РЕСУРСОВ С ОТЛАДКОЙ
+const forceUpdateResourcesInIndexedDB = async (resources) => {
+  console.log('[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Начинаем принудительное обновление ресурсов');
+  console.log('[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Ресурсы:', resources);
+  
+  if (!window.IndexedDBModule || !window.IndexedDBModule.getInventoryItems || !window.IndexedDBModule.updateInventoryItem) {
+    console.error('[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] IndexedDBModule недоступен');
+    return false;
+  }
+  
+  try {
+    const inventoryItems = await window.IndexedDBModule.getInventoryItems();
+    console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Загружен инвентарь: ${inventoryItems.length} предметов`);
+    
+    for (const [resourceId, amount] of Object.entries(resources)) {
+      if (!resourceId || resourceId === 'telegramId' || resourceId === 'userId') continue;
+      
+      const numericAmount = parseInt(amount) || 0;
+      console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Обрабатываем ${resourceId} = ${numericAmount}`);
+      
+      const existingItem = inventoryItems.find(item => 
+        item.id === resourceId || item.id.toLowerCase() === resourceId.toLowerCase()
+      );
+      
+      if (existingItem) {
+        console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Найден существующий ${existingItem.id} (было: ${existingItem.quantity})`);
+        
+        // ПРИНУДИТЕЛЬНО обновляем, даже если количество 0
+        const updatedItem = {
+          ...existingItem,
+          quantity: numericAmount,
+          updatedAt: new Date().toISOString()
+        };
+        
+        await window.IndexedDBModule.updateInventoryItem(existingItem.id, updatedItem);
+        console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] ✓ Обновлено: ${existingItem.id} = ${numericAmount}`);
+        
+        // Проверяем результат
+        const checkItems = await window.IndexedDBModule.getInventoryItems();
+        const checkItem = checkItems.find(item => item.id === existingItem.id);
+        if (checkItem) {
+          console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] ✓ Проверка: ${existingItem.id} теперь = ${checkItem.quantity}`);
+          if (checkItem.quantity !== numericAmount) {
+            console.error(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] ✗ ПРОБЛЕМА: ожидали ${numericAmount}, получили ${checkItem.quantity}`);
+          }
+        } else {
+          console.error(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] ✗ ОШИБКА: предмет ${existingItem.id} исчез!`);
+        }
+      } else if (numericAmount > 0) {
+        console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Создаем новый ${resourceId} = ${numericAmount}`);
+        
+        const newItem = {
+          id: resourceId,
+          name: resourceId,
+          type: 'resource',
+          quantity: numericAmount,
+          description: `Resource: ${resourceId}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        
+        await window.IndexedDBModule.updateInventoryItem(resourceId, newItem);
+        console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] ✓ Создано: ${resourceId} = ${numericAmount}`);
+      } else {
+        console.log(`[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Пропускаем создание ${resourceId} с количеством 0`);
+      }
+    }
+    
+    console.log('[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Завершено успешно');
+    return true;
+  } catch (error) {
+    console.error('[ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ] Ошибка:', error);
+    return false;
+  }
+}; 
+
+const saveResourcesDirectlyToIndexedDB = async (resources) => {
+  console.log('[ModalModule] === ?????? ?????????? ???????? ? INDEXEDDB ===');
+  console.log('[ModalModule] ??????? ??? ??????????:', resources);
+  try {
+    // Проверяем доступность IndexedDBModule и его функций
+    if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function' && 
+        typeof window.IndexedDBModule.updateInventoryItem === 'function') {
+      
+      console.log('[ModalModule] Используем IndexedDBModule для сохранения ресурсов в inventory');
+      
+      // Получаем текущий инвентарь
+      const inventoryItems = await window.IndexedDBModule.getInventoryItems();
+      
+      // Для каждого ресурса обновляем соответствующий предмет в инвентаре
+      for (const [resourceId, amount] of Object.entries(resources)) {
+        if (!resourceId || resourceId === 'telegramId' || resourceId === 'userId') continue;
+        
+        // Проверяем, есть ли уже такой предмет в инвентаре
+        const existingItem = inventoryItems.find(item => 
+          item.id === resourceId || 
+          item.id.toLowerCase() === resourceId.toLowerCase()
+        );
+        
+        if (existingItem) {
+          // Обновляем количество существующего предмета
+          await window.IndexedDBModule.updateInventoryItem(existingItem.id, {
+            ...existingItem,
+            quantity: amount
+          });
+          console.log(`[ModalModule] Обновлен ресурс в инвентаре: ${existingItem.id} = ${amount}`);
+        } else if (amount >= 0) {
+          // Создаем новый предмет в инвентаре
+          await window.IndexedDBModule.updateInventoryItem(resourceId, {
+            id: resourceId,
+            name: resourceId,
+            type: 'resource',
+            quantity: amount,
+            description: `Resource: ${resourceId}`,
+            createdAt: new Date().toISOString()
+          });
+          console.log(`[ModalModule] Добавлен новый ресурс в инвентарь: ${resourceId} = ${amount}`);
+        }
+      }
+      
+      // Также сохраняем в глобальной переменной для доступа из других модулей
+      window.globalUserResources = {...window.globalUserResources, ...resources};
+      
+      return true;
+      
+    } else {
+      // Если IndexedDBModule не доступен, используем прямой доступ к IndexedDB
+      console.log('[ModalModule] IndexedDBModule не доступен, используем прямой доступ к IndexedDB');
+      
+      return new Promise((resolve, reject) => {
+    try {
+      // Открываем соединение с IndexedDB
+          const request = indexedDB.open('rpgDatabase', 10);
+      
+      request.onerror = (event) => {
+            console.error('[ModalModule] Ошибка при открытии IndexedDB:', event.target.error);
+        reject(event.target.error);
+      };
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        
+            // Проверяем наличие хранилища 'inventory'
+            if (!db.objectStoreNames.contains('inventory')) {
+              console.warn('[ModalModule] В rpgDatabase нет хранилища inventory');
+              db.close();
+          resolve(false);
+          return;
+        }
+        
+        try {
+              // Начинаем транзакцию для получения текущего инвентаря
+              const getTransaction = db.transaction(['inventory'], 'readonly');
+              const getStore = getTransaction.objectStore('inventory');
+              const getRequest = getStore.getAll();
+              
+              getRequest.onsuccess = async () => {
+                const inventoryItems = getRequest.result || [];
+          
+                // Закрываем транзакцию чтения
+                getTransaction.oncomplete = async () => {
+                  try {
+                    // Начинаем транзакцию записи для обновления инвентаря
+                    const updateTransaction = db.transaction(['inventory'], 'readwrite');
+                    const updateStore = updateTransaction.objectStore('inventory');
+                    
+                    // Для каждого ресурса обновляем или создаем предмет в инвентаре
+                    for (const [resourceId, amount] of Object.entries(resources)) {
+                      if (!resourceId || resourceId === 'telegramId' || resourceId === 'userId') continue;
+                      
+                      // Ищем существующий предмет
+                      const existingItem = inventoryItems.find(item => 
+                        item.id === resourceId || 
+                        item.id.toLowerCase() === resourceId.toLowerCase()
+                      );
+            
+                      if (existingItem) {
+                        // Обновляем существующий предмет
+                        const updatedItem = {
+                          ...existingItem,
+                          quantity: amount,
+                          updatedAt: new Date().toISOString()
+                        };
+                        updateStore.put(updatedItem);
+                      } else if (amount >= 0) {
+                        // Создаем новый предмет
+                        const newItem = {
+                          id: resourceId,
+                          name: resourceId,
+                          type: 'resource',
+                          quantity: amount,
+                          description: `Resource: ${resourceId}`,
+                          createdAt: new Date().toISOString(),
+                          updatedAt: new Date().toISOString()
+              };
+                        updateStore.add(newItem);
+                      }
+                    }
+                    
+                    // Обработка завершения транзакции
+                    updateTransaction.oncomplete = () => {
+                      console.log('[ModalModule] Ресурсы успешно сохранены в inventory');
+                      db.close();
+                      
+                      // Также сохраняем в глобальной переменной для доступа из других модулей
+                      window.globalUserResources = {...window.globalUserResources, ...resources};
+                
+                resolve(true);
+              };
+              
+                    updateTransaction.onerror = (event) => {
+                      console.error('[ModalModule] Ошибка при обновлении инвентаря:', event.target.error);
+                      db.close();
+                reject(event.target.error);
+              };
+                  } catch (updateError) {
+                    console.error('[ModalModule] Ошибка при создании транзакции для обновления:', updateError);
+                    db.close();
+                    reject(updateError);
+            }
+          };
+          
+                getTransaction.onerror = (event) => {
+                  console.error('[ModalModule] Ошибка при чтении инвентаря:', event.target.error);
+                  db.close();
+            reject(event.target.error);
+          };
+          };
+          
+              getRequest.onerror = (event) => {
+                console.error('[ModalModule] Ошибка при получении инвентаря:', event.target.error);
+                db.close();
+            reject(event.target.error);
+          };
+          
+        } catch (transactionError) {
+              console.error('[ModalModule] Ошибка при создании транзакции:', transactionError);
+              db.close();
+              reject(transactionError);
+        }
+      };
+    } catch (error) {
+          console.error('[ModalModule] Непредвиденная ошибка при сохранении ресурсов:', error);
+          reject(error);
+    }
+  }).catch((error) => {
+        console.error('[ModalModule] Ошибка при сохранении ресурсов в IndexedDB:', error);
+    return false;
+  });
+    }
+  } catch (error) {
+    console.error('[ModalModule] Критическая ошибка при сохранении ресурсов:', error);
+    return false;
+  }
+};
+
+// Enhanced version of saveResourcesToIndexedDB with server sync
+const enhancedSaveResourcesWithSync = async (resources, options = {}) => {
+  try {
+    // Проверка на флаг предотвращения бесконечных циклов
+    // Если эта функция была вызвана из обработчика событий, не отправляем событие повторно
+    const shouldDispatchEvent = options.dispatchEvent !== false;
+    
+    // Получаем telegramId (по возможности)
+    let telegramId;
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && 
+        window.Telegram.WebApp.initDataUnsafe.user && window.Telegram.WebApp.initDataUnsafe.user.id) {
+      telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+    } else {
+      telegramId = localStorage.getItem('telegramId');
+    }
+
+    // Список специальных ресурсов, которые НЕ нужно сохранять в таблицу inventory
+    const specialResources = ['onion', 'candy', 'junk', 'coin', 'streak', 'spinsleft'];
+
+    // Обновляем данные в inventory вместо сохранения в resources
+    // Преобразуем ресурсы в формат инвентаря
+    if (window.IndexedDBModule && typeof window.IndexedDBModule.getInventoryItems === 'function') {
+      const inventoryItems = await window.IndexedDBModule.getInventoryItems();
+      
+      // Для каждого ресурса обновляем соответствующий предмет в инвентаре
+      for (const [resourceId, amount] of Object.entries(resources)) {
+        if (!resourceId || resourceId === 'telegramId' || resourceId === 'userId') continue;
+        
+        // Пропускаем специальные ресурсы (они хранятся в UserResourcesDB)
+        if (specialResources.includes(resourceId.toLowerCase())) continue;
+        
+        // Проверяем, есть ли уже такой предмет в инвентаре
+        const existingItem = inventoryItems.find(item => 
+          item.id === resourceId || 
+          item.id.toLowerCase() === resourceId.toLowerCase()
+        );
+        
+        if (existingItem) {
+          // Обновляем количество существующего предмета
+          if (window.IndexedDBModule.updateInventoryItem) {
+            await window.IndexedDBModule.updateInventoryItem(existingItem.id, {
+              ...existingItem,
+              quantity: amount
+            });
+          }
+        } else if (amount >= 0) {
+          // Создаем новый предмет в инвентаре
+          if (window.IndexedDBModule.updateInventoryItem) {
+            await window.IndexedDBModule.updateInventoryItem(resourceId, {
+              id: resourceId,
+              name: resourceId,
+              type: 'resource',
+              quantity: amount,
+              description: `Resource: ${resourceId}`,
+              createdAt: new Date().toISOString()
+            });
+          }
+        }
+      }
+    }
+
+    // Также сохраняем в глобальной переменной для доступа из других модулей
+    window.globalUserResources = JSON.parse(JSON.stringify(resources));
+    
+    // Отправляем событие ТОЛЬКО если это не вызов из обработчика события и shouldDispatchEvent не равен false
+    if (shouldDispatchEvent) {
+      window.dispatchEvent(new CustomEvent('resourcesUpdated', { 
+        detail: { resources: resources, timestamp: Date.now() } 
+      }));
+    }
+    
+    // Обновляем компоненты React без отправки дополнительных событий
+    if (window.InventoryModule && typeof window.InventoryModule.refreshReactComponents === 'function') {
+      window.InventoryModule.refreshReactComponents();
+    }
+
+    // Синхронизируем изменения с сервером, если есть соединение
+    if (telegramId && !options.skipServerSync) {
+      try {
+        // Защита от многократных запросов - проверяем последний запрос
+        const now = Date.now();
+        const lastSyncTime = window.lastServerSyncTime || 0;
+        
+        // Пропускаем синхронизацию, если с последнего обновления прошло менее 2 секунд
+        if (now - lastSyncTime < 2000) {
+          return true;
+        }
+        
+        // Запоминаем время этого запроса
+        window.lastServerSyncTime = now;
+        
+        // Обновляем ресурсы на сервере
+        const serverResponse = await fetch('rpg.php?action=updateResources', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            telegramId: telegramId,
+            resources: resources
+          })
+        });
+
+        if (serverResponse.ok) {
+          console.log('[ModalModule] Ресурсы успешно синхронизированы с сервером');
+        } else {
+          // Если сервер вернул ошибку, но это не критично для клиента
+          console.error(`[ModalModule] Ошибка сервера при синхронизации: ${serverResponse.status}`);
+        }
+      } catch (syncError) {
+        console.error('[ModalModule] Ошибка при синхронизации ресурсов с сервером:', syncError.message);
+        // Не прерываем выполнение, даже если синхронизация не удалась
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при сохранении ресурсов в IndexedDB:', error.message);
+    return false;
+  }
+};
+
+// Add our enhanced function to the window.ModalModule object
+// This will be initialized in the initModule function
+initModule().then(() => {
+  // Export our improved function
+  if (window.ModalModule) {
+    window.ModalModule.enhancedSaveResourcesWithSync = enhancedSaveResourcesWithSync;
+    
+    // Override the existing saveResourcesToIndexedDB if it exists
+    if (typeof window.ModalModule.saveResourcesToIndexedDB === 'function') {
+      window.ModalModule.saveResourcesToIndexedDB = enhancedSaveResourcesWithSync;
+    }
+  }
+});
+
+// Оставлена только современная версия функции saveResourcesDirectlyToIndexedDB
+
+// Helper function to normalize strings for comparison
+const normalizeString = (str) => {
+  if (!str) return '';
+  return str.toLowerCase().replace(/[\s_-]+/g, '');
+};
+
+// Добавляем функцию для крафта предмета и обновления инвентаря
+const craftAndUpdateInventory = async (itemId) => {
+  try {
+    // Пробуем использовать улучшенную функцию из InventoryModule
+    if (window.InventoryModule && typeof window.InventoryModule.craftItemAndCloseModal === 'function') {
+      console.log('[ModalModule] Используем craftItemAndCloseModal из InventoryModule');
+      return await window.InventoryModule.craftItemAndCloseModal(itemId);
+    }
+    
+    // Если улучшенная функция недоступна, используем стандартный механизм
+    console.log('[ModalModule] Используем стандартный механизм крафта');
+    const craftResult = await window.craftItemFromModal(itemId);
+    
+    if (craftResult && craftResult.success) {
+      // Закрываем модальное окно с задержкой
+      setTimeout(() => {
+        closeModal();
+        
+        // Обновляем интерфейс
+        setTimeout(async () => {
+          // Используем принудительное обновление, если оно доступно
+          if (window.CraftingModule && typeof window.CraftingModule.forceUpdateUI === 'function') {
+            console.log('[ModalModule] Принудительное обновление интерфейса через CraftingModule.forceUpdateUI');
+            await window.CraftingModule.forceUpdateUI();
+          } else {
+            // Запасной вариант - стандартное обновление
+            await refreshResourcesAfterCraft();
+            
+            // Также обновляем через CraftingModule если он доступен
+            if (window.CraftingModule) {
+              if (typeof window.CraftingModule.refreshInventory === 'function') {
+                await window.CraftingModule.refreshInventory();
+              }
+              
+              if (typeof window.CraftingModule.globalRefreshInventoryDisplay === 'function') {
+                await window.CraftingModule.globalRefreshInventoryDisplay();
+              }
+            }
+          }
+        }, 300);
+      }, 800);
+      
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при крафте и обновлении инвентаря:', error.message);
+    return false;
+  }
+};
+
+// Функция для получения уровня персонажа
+const getPlayerLevel = () => {
+  return playerLevel;
+};
+
+// Функция для проверки всех хранилищ уровня персонажа
+const checkPlayerLevelStorages = async () => {
+  console.log('[ModalModule] ====== ПРОВЕРКА ВСЕХ ХРАНИЛИЩ УРОВНЯ ПЕРСОНАЖА ======');
+  
+  // 1. Проверяем локальную переменную модуля
+  console.log(`[ModalModule] Локальная переменная playerLevel: ${playerLevel}`);
+  
+  // 2. Проверяем глобальную переменную
+  console.log(`[ModalModule] Глобальная переменная window.playerLevel: ${window.playerLevel || 'не определена'}`);
+  
+  // 3. Проверяем localStorage
+  try {
+    const localStorageLevel = localStorage.getItem('rpg_user_level');
+    console.log(`[ModalModule] Уровень в localStorage: ${localStorageLevel || 'не найден'}`);
+  } catch (err) {
+    console.error('[ModalModule] Ошибка при доступе к localStorage:', err);
+  }
+  
+  // 4. Проверяем IndexedDB
+  if (window.IndexedDBModule && typeof window.IndexedDBModule.getUserData === 'function') {
+    try {
+      const userData = await window.IndexedDBModule.getUserData();
+      console.log('[ModalModule] Данные пользователя в IndexedDB:', userData);
+      console.log(`[ModalModule] Уровень в IndexedDB: ${userData && userData.level ? userData.level : 'не найден'}`);
+    } catch (err) {
+      console.error('[ModalModule] Ошибка при получении данных из IndexedDB:', err);
+    }
+  } else {
+    console.log('[ModalModule] IndexedDBModule.getUserData не доступен');
+  }
+  
+  // 5. Запрашиваем с сервера через RPGApp.loadUserData
+  if (window.RPGApp && typeof window.RPGApp.loadUserData === 'function') {
+    try {
+      const userData = await window.RPGApp.loadUserData();
+      console.log('[ModalModule] Данные пользователя с сервера:', userData);
+      console.log(`[ModalModule] Уровень с сервера: ${userData && userData.level ? userData.level : 'не найден'}`);
+    } catch (err) {
+      console.error('[ModalModule] Ошибка при получении данных с сервера:', err);
+    }
+  } else {
+    console.log('[ModalModule] RPGApp.loadUserData не доступен');
+  }
+  
+  console.log('[ModalModule] ====== ПРОВЕРКА ЗАВЕРШЕНА ======');
+  return {
+    moduleLevel: playerLevel,
+    globalLevel: window.playerLevel,
+    localStorageLevel: localStorage.getItem('rpg_user_level')
+  };
+};
+
+// Добавляем новую вспомогательную функцию для загрузки специальных ресурсов
+const loadSpecialResourcesFromIndexedDB = async () => {
+  try {
+    // Определяем telegramId
+    let telegramId;
+    if (window.Telegram && window.Telegram.WebApp && 
+        window.Telegram.WebApp.initDataUnsafe && 
+        window.Telegram.WebApp.initDataUnsafe.user) {
+      telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
+    } else {
+      telegramId = localStorage.getItem('telegramId');
+    }
+    
+    if (!telegramId) {
+      console.log('[ModalModule] Не удалось определить telegramId для загрузки специальных ресурсов');
+      return {};
+    }
+    
+    // Открываем базу данных
+    const dbRequest = indexedDB.open('UserResourcesDB', 10);
+    
+    return new Promise((resolve, reject) => {
+      dbRequest.onerror = (event) => {
+        reject(event.target.error);
+      };
+      
+      dbRequest.onsuccess = (event) => {
+        const db = event.target.result;
+        
+        // Проверяем наличие хранилища ресурсов
+        if (!db.objectStoreNames.contains('resources')) {
+          db.close();
+          resolve({});
+          return;
+        }
+        
+        const resourceId = `user_${telegramId}`;
+        const transaction = db.transaction('resources', 'readonly');
+        const resourcesStore = transaction.objectStore('resources');
+        
+        const request = resourcesStore.get(resourceId);
+        
+        request.onsuccess = () => {
+          const resources = request.result || {};
+          if (resources && Object.keys(resources).length > 0) {
+            // Фильтруем служебные поля из результата
+            const filteredResources = {};
+            Object.keys(resources).forEach(key => {
+              // Исключаем поля id, telegramId, lastUpdated, loadedFromServer и другие служебные
+              if (!['id', 'telegramId', 'lastUpdated', 'loadedFromServer'].includes(key)) {
+                filteredResources[key] = resources[key];
+              }
+            });
+            resolve(filteredResources);
+          } else {
+            resolve({});
+          }
+          db.close();
+        };
+        
+        request.onerror = (event) => {
+          db.close();
+          reject(event.target.error);
+        };
+      };
+    }).catch(error => {
+      console.error('[ModalModule] Ошибка при получении специальных ресурсов:', error);
+      return {};
+    });
+  } catch (error) {
+    console.error('[ModalModule] Общая ошибка загрузки специальных ресурсов:', error);
+    return {};
+  }
+};
+
+// Экспортируем новую функцию
+window.loadSpecialResourcesFromIndexedDB = loadSpecialResourcesFromIndexedDB;
+
+// Добавляем кнопку для синхронизации ресурсов в интерфейс
+window.addEventListener('load', () => {
+  // Проверяем, что мы на странице RPG
+  if (window.location.href.includes('rpg') || document.querySelector('.rpg-container')) {
+    setTimeout(() => {
+      const syncButton = document.createElement('button');
+      syncButton.textContent = 'Синхронизировать ресурсы';
+      syncButton.style.position = 'fixed';
+      syncButton.style.bottom = '10px';
+      syncButton.style.left = '10px';
+      syncButton.style.zIndex = '9999';
+      syncButton.style.padding = '8px 12px';
+      syncButton.style.backgroundColor = '#4CAF50';
+      syncButton.style.color = 'white';
+      syncButton.style.border = 'none';
+      syncButton.style.borderRadius = '4px';
+      syncButton.style.cursor = 'pointer';
+      syncButton.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+      
+      syncButton.addEventListener('click', async () => {
+        syncButton.disabled = true;
+        syncButton.textContent = 'Синхронизация...';
+        
+        const success = await syncResourcesWithIndexedDB();
+        
+        if (success) {
+          window.showNotification('Ресурсы успешно синхронизированы', 'success');
+          
+          // НЕ проверяем активные сессии крафта при нажатии кнопки синхронизации,
+          // это будет делаться только при событии crafting-page-opened
+        } else {
+          window.showNotification('Ошибка при синхронизации ресурсов', 'error');
+        }
+        
+        syncButton.disabled = false;
+        syncButton.textContent = 'Синхронизировать ресурсы';
+      });
+      
+      document.body.appendChild(syncButton);
+    }, 1000);
+  }
+});
+
+// Добавляем глобальную функцию checkCraftingInstallation (в конце файла, перед экспортом модуля)
+// Функция для проверки наличия установленных костра/печи
+const checkCraftingInstallation = (type) => {
+  if (type === 'campfire') {
+    return craftingInstallations.campfire;
+  } else if (type === 'furnace') {
+    return craftingInstallations.furnace;
+  } else {
+    console.warn('[ModalModule] Неизвестный тип крафтовой установки:', type);
+    return false;
+  }
+};
+
+// Добавляем функцию для обновления информации о крафтовых установках
+const updateCraftingInstallations = (data) => {
+  if (!data) return;
+  
+  if (data.campfire !== undefined) {
+    craftingInstallations.campfire = data.campfire === 1 || data.campfire === true;
+    console.log(`[ModalModule] Обновлена информация о костре: ${craftingInstallations.campfire}`);
+  }
+  
+  if (data.furnace !== undefined) {
+    craftingInstallations.furnace = data.furnace === 1 || data.furnace === true;
+    console.log(`[ModalModule] Обновлена информация о печи: ${craftingInstallations.furnace}`);
+  }
+  
+  // Обновляем глобальную переменную
+  window.craftingInstallations = {...craftingInstallations};
+  
+  // Обновляем глобальную функцию
+  window.checkCraftingInstallation = checkCraftingInstallation;
+};
+
+// === ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ===
+// Вычисляет максимальное количество крафта по материалам и ресурсам
+function getMaxCraftAmount(materials, userResources) {
+  if (!materials || !userResources) return 1;
+  let min = Infinity;
+  for (const [material, amount] of Object.entries(materials)) {
+    let userAmount = 0;
+    const materialLower = material.toLowerCase();
+    const materialNoSpaces = materialLower.replace(/\s+/g, '');
+    const materialWithUnderscore = materialLower.replace(/\s+/g, '_');
+    const materialCapitalized = materialLower.charAt(0).toUpperCase() + materialLower.slice(1);
+    const materialProper = material.charAt(0).toUpperCase() + material.slice(1).toLowerCase();
+    const materialProperNoSpaces = materialProper.replace(/\s+/g, '');
+    if (userResources[materialProper] !== undefined) userAmount = userResources[materialProper];
+    else if (userResources[material] !== undefined) userAmount = userResources[material];
+    else if (userResources[materialLower] !== undefined) userAmount = userResources[materialLower];
+    else if (userResources[materialCapitalized] !== undefined) userAmount = userResources[materialCapitalized];
+    else if (userResources[materialNoSpaces] !== undefined) userAmount = userResources[materialNoSpaces];
+    else if (userResources[materialWithUnderscore] !== undefined) userAmount = userResources[materialWithUnderscore];
+    else if (userResources[materialProperNoSpaces] !== undefined) userAmount = userResources[materialProperNoSpaces];
+    if (materialLower === 'woodlog' && userAmount === 0) {
+      const woodlogVariants = ['Woodlog', 'WoodLog', 'Wood Log', 'Wood', 'Log', 'Logs', 'Wood_Log'];
+      for (const variant of woodlogVariants) {
+        if (userResources[variant] !== undefined) {
+          userAmount = userResources[variant];
+          break;
+        }
+      }
+    }
+    if (materialLower === 'rock' && userAmount === 0) {
+      const variants = ['Rock', 'Rocks', 'Stone', 'Stones'];
+      for (const variant of variants) {
+        if (userResources[variant] !== undefined) {
+          userAmount = userResources[variant];
+          break;
+        }
+      }
+    }
+    if (materialLower === 'fiber' && userAmount === 0) {
+      const variants = ['Fiber', 'Plant Fiber', 'PlantFiber', 'Plant_Fiber'];
+      for (const variant of variants) {
+        if (userResources[variant] !== undefined) {
+          userAmount = userResources[variant];
+          break;
+        }
+      }
+    }
+    const possible = Math.floor(userAmount / amount);
+    if (possible < min) min = possible;
+  }
+  return Math.max(1, min);
+}
+
+// Функция для переноса определенных предметов из inventory в resources
+async function transferInventoryToResources(telegramId, items) {
+  try {
+    if (!telegramId) {
+      console.log('[ModalModule] Не указан telegramId для переноса предметов в ресурсы');
+      return false;
+    }
+    
+    // Список предметов, которые должны быть в resources, а не в inventory
+    const resourceItems = ['rope', 'crushedrock', 'ironingot'];
+    
+    // Фильтрация предметов для переноса
+    const itemsToTransfer = {};
+    let hasItemsToTransfer = false;
+    
+    for (const [itemId, quantity] of Object.entries(items)) {
+      // Проверяем, есть ли предмет в списке ресурсов
+      const normalizedItemId = itemId.toLowerCase();
+      if (resourceItems.includes(normalizedItemId)) {
+        itemsToTransfer[itemId] = quantity;
+        hasItemsToTransfer = true;
+      }
+    }
+    
+    if (!hasItemsToTransfer) {
+      console.log('[ModalModule] Нет предметов для переноса в ресурсы');
+      return false;
+    }
+    
+    console.log('[ModalModule] Предметы для переноса в ресурсы:', itemsToTransfer);
+    
+    // Обновляем ресурсы пользователя
+    const resourceUpdateResponse = await fetch('rpg.php?action=updateResources', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        telegramId: telegramId,
+        resources: itemsToTransfer
+      })
+    });
+    
+    if (!resourceUpdateResponse.ok) {
+      console.log('[ModalModule] Ошибка HTTP при обновлении ресурсов:', resourceUpdateResponse.status);
+      return false;
+    }
+    
+    console.log('[ModalModule] Ресурсы успешно обновлены');
+    
+    // Удаляем перенесенные предметы из инвентаря
+    const itemsToRemove = {};
+    for (const itemId in itemsToTransfer) {
+      itemsToRemove[itemId] = 0; // Установка в 0 удалит предмет из инвентаря
+    }
+    
+    const inventoryUpdateResponse = await fetch('rpg.php?action=updateUserInventory', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        telegramId: telegramId,
+        inventory: itemsToRemove
+      })
+    });
+    
+    if (!inventoryUpdateResponse.ok) {
+      console.log('[ModalModule] Ошибка HTTP при удалении предметов из инвентаря:', inventoryUpdateResponse.status);
+      
+      // Пробуем альтернативный метод удаления из инвентаря
+      try {
+        const alternativeInventory = Object.keys(itemsToRemove).map(itemId => ({
+          itemId,
+          quantity: 0
+        }));
+        
+        const alternativeResponse = await fetch('rpg.php?action=updateInventory', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            telegramId: telegramId,
+            inventory: alternativeInventory
+          })
+        });
+        
+        if (!alternativeResponse.ok) {
+          console.log('[ModalModule] Альтернативный метод удаления из инвентаря также не удался');
+        } else {
+          console.log('[ModalModule] Предметы успешно удалены из инвентаря альтернативным методом');
+        }
+      } catch (e) {
+        console.error('[ModalModule] Ошибка при альтернативном удалении из инвентаря:', e);
+      }
+    } else {
+      console.log('[ModalModule] Предметы успешно удалены из инвентаря');
+    }
+    
+    // Удаляем предметы из IndexedDB
+    if (window.IndexedDBModule && typeof window.IndexedDBModule.deleteInventoryItems === 'function') {
+      try {
+        for (const itemId in itemsToTransfer) {
+          await window.IndexedDBModule.deleteInventoryItems(itemId);
+          console.log(`[ModalModule] Предмет ${itemId} удален из IndexedDB`);
+        }
+      } catch (error) {
+        console.error('[ModalModule] Ошибка при удалении предметов из IndexedDB:', error);
+      }
+    } else if (window.IndexedDBModule && typeof window.IndexedDBModule.updateInventoryItem === 'function') {
+      // Если нет метода удаления, попробуем установить количество в 0
+      try {
+        for (const itemId in itemsToTransfer) {
+          await window.IndexedDBModule.updateInventoryItem(itemId, {
+            quantity: 0
+          });
+          console.log(`[ModalModule] Количество предмета ${itemId} установлено в 0 в IndexedDB`);
+        }
+      } catch (error) {
+        console.error('[ModalModule] Ошибка при обновлении предметов в IndexedDB:', error);
+      }
+    }
+    
+    // Обновляем локальные данные
+    try {
+      // Получаем текущие ресурсы
+      let currentResources = window.globalUserResources || {};
+      
+      // Добавляем перенесенные предметы в ресурсы
+      for (const [itemId, quantity] of Object.entries(itemsToTransfer)) {
+        if (currentResources[itemId] !== undefined) {
+          currentResources[itemId] = Number(currentResources[itemId]) + Number(quantity);
+        } else {
+          currentResources[itemId] = Number(quantity);
+        }
+      }
+      
+      // Сохраняем только в глобальной переменной для совместимости
+      window.globalUserResources = {...currentResources};
+      
+      // Обновляем ресурсы в IndexedDB, если доступно
+      if (window.IndexedDBModule && typeof window.IndexedDBModule.saveResources === 'function') {
+        await window.IndexedDBModule.saveResources(currentResources);
+      }
+      
+      // Очищаем предметы из localStorage inventory если там хранятся
+      try {
+        const inventoryKey = `inventory_${telegramId}`;
+        const storedInventory = localStorage.getItem(inventoryKey);
+        
+        if (storedInventory) {
+          const inventory = JSON.parse(storedInventory);
+          
+          // Удаляем перенесенные предметы
+          for (const itemId in itemsToTransfer) {
+            delete inventory[itemId];
+          }
+          
+          // Сохраняем обновленный инвентарь
+          localStorage.setItem(inventoryKey, JSON.stringify(inventory));
+        }
+      } catch (e) {
+        console.error('[ModalModule] Ошибка при обновлении localStorage инвентаря:', e);
+      }
+      
+      // Обновление интерфейса
+      if (window.InventoryModule && typeof window.InventoryModule.refreshInventoryDisplay === 'function') {
+        window.InventoryModule.refreshInventoryDisplay();
+      }
+      
+      if (window.refreshResourcesAfterCraft && typeof window.refreshResourcesAfterCraft === 'function') {
+        await window.refreshResourcesAfterCraft();
+      }
+      
+      // Отправляем событие обновления ресурсов
+      window.dispatchEvent(new CustomEvent('resourcesUpdated', { 
+        detail: { resources: currentResources, timestamp: Date.now() } 
+      }));
+      
+      return true;
+    } catch (error) {
+      console.error('[ModalModule] Ошибка при обновлении локальных данных:', error);
+      return false;
+    }
+  } catch (error) {
+    console.error('[ModalModule] Ошибка при переносе предметов в ресурсы:', error);
+    return false;
+  }
+}
+
+// Обработчик события userRegistered
+document.addEventListener('userRegistered', async (event) => {
+  console.log('[ModalModule] Получено событие userRegistered');
+  const { telegramId } = event.detail;
+  console.log(`[ModalModule] Начало инициализации для пользователя: ${telegramId}`);
+  
+  // Попытка синхронизации ресурсов с IndexedDB после регистрации пользователя
+  setTimeout(async () => {
+    try {
+      console.log('[ModalModule] Попытка синхронизации ресурсов после регистрации...');
+      const success = await syncResourcesWithIndexedDB();
+      console.log(`[ModalModule] Результат синхронизации после регистрации: ${success ? 'успешно' : 'неудачно'}`);
+    } catch (error) {
+      console.error('[ModalModule] Ошибка при синхронизации после регистрации:', error);
+    }
+  }, 2000); // Задержка 2 секунды для уверенности, что пользователь полностью зарегистрирован
+});
+
+// Экспортируем функцию в глобальный объект window для доступа из других модулей
+window.syncResourcesWithIndexedDB = syncResourcesWithIndexedDB;
+
+const deleteExhaustedResourcesFromIndexedDB = async (resources) => {
+  console.log('[УДАЛЕНИЕ ИСЧЕРПАННЫХ РЕСУРСОВ] === НАЧАЛО УДАЛЕНИЯ ===');

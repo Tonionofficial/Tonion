@@ -1,0 +1,45 @@
+[28-May-2025 20:04:06 UTC] PHP Warning:  Undefined variable $current_stats_avb in /home/u209964260/domains/tonion.io/public_html/test/source/rpg.php on line 5002
+[28-May-2025 20:04:06 UTC] PHP Warning:  Undefined variable $current_stats_avb in /home/u209964260/domains/tonion.io/public_html/test/source/rpg.php on line 5008
+[28-May-2025 20:04:06 UTC] PHP Warning:  Undefined variable $current_stats_avb in /home/u209964260/domains/tonion.io/public_html/test/source/rpg.php on line 5030
+[29-May-2025 16:38:49 UTC] UNEQUIP_ITEM DEBUG: Array
+(
+    [telegramId] => 2088076201
+    [slot] => weapon1
+    [itemId] => primpickaxe
+)
+
+[29-May-2025 16:38:49 UTC] UNEQUIP_ITEM: обновлен инвентарь в game_users для 2088076201, новый JSON: {"furnace":3,"primaxe":1,"primbow":2,"campfire":3,"primbelt":1,"primclub":2,"primarmor":2,"primboots":2,"primknife":1,"primpants":1,"primspear":1,"cookedmeat":105,"primarrows":3,"primgloves":1,"primhelmet":1,"leatherarmor":1,"leatherpants":1,"primvambraces":1,"leathervambraces":1,"primpickaxe":1}
+[29-May-2025 16:38:49 UTC] UNEQUIP_ITEM: предмет primpickaxe удален из слота weapon1 для пользователя 2088076201
+[29-May-2025 16:38:50 UTC] EQUIP_ITEM DEBUG: Array
+(
+    [telegramId] => 2088076201
+    [itemId] => primclub
+    [slot] => weapon1
+)
+
+[29-May-2025 16:38:50 UTC] EQUIP_ITEM: текущая экипировка: Array
+(
+    [telegram_id] => 2088076201
+    [weapon1] => 
+    [weapon2] => 
+    [helmet] => leatherhelmet
+    [armor] => leatherarmor
+    [belt] => leatherbelt
+    [pants] => leatherpants
+    [boots] => leatherboots
+    [gloves] => leathergloves
+    [bracers] => leathervambraces
+    [earring] => 
+    [amulet] => 
+    [ring1] => 
+    [ring2] => 
+    [ring3] => 
+    [ring4] => 
+    [potion1] => cookedmeat
+    [potion2] => 
+    [potion3] => 
+)
+
+[29-May-2025 16:38:50 UTC] EQUIP_ITEM: обновлен инвентарь в game_users для 2088076201, новый JSON: {"furnace":3,"primaxe":1,"primbow":2,"campfire":3,"primbelt":1,"primclub":1,"primarmor":2,"primboots":2,"primknife":1,"primpants":1,"primspear":1,"cookedmeat":105,"primarrows":3,"primgloves":1,"primhelmet":1,"primpickaxe":1,"leatherarmor":1,"leatherpants":1,"primvambraces":1,"leathervambraces":1}
+[29-May-2025 16:38:50 UTC] EQUIP_ITEM: обновлен equiped_items (weapon1 = primclub) для пользователя 2088076201
+[29-May-2025 16:38:50 UTC] EQUIP_ITEM: успешно завершено для пользователя 2088076201

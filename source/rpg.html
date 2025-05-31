@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Модуль для управления логами -->
+    <script src="js/rpg/debug.js?v=1.1.32"></script>
+    <link rel="stylesheet" href="style/rpg.css?v=1.1.32">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Oswald:wght@200..700&display=swap" rel="stylesheet">
+    
+    <!-- Отключаем кэширование страницы -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
+    <!-- Polyfills for older browsers support - load these first -->
+    <script src="js/lib/babel-polyfill.min.js"></script>
+    
+    <!-- React and ReactDOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX transformation -->
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    
+    <!-- Remove babel-standalone.min.js as it conflicts with the unpkg version -->
+    
+    <!-- Axios for API requests -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+
+    <style>
+        /* Стили для уведомления о новой версии */
+        .version-notification {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(25, 25, 35, 0.95);
+            border: 2px solid #8a2be2;
+            border-radius: 8px;
+            padding: 15px;
+            color: #fff;
+            z-index: 1000;
+            box-shadow: 0 0 15px rgba(138, 43, 226, 0.5);
+            text-align: center;
+            max-width: 90%;
+            font-family: 'Michroma', sans-serif;
+        }
+        
+        .version-notification h3 {
+            margin-top: 0;
+            color: #8a2be2;
+        }
+        
+        .version-notification p {
+            margin-bottom: 15px;
+        }
+        
+        .update-button {
+            background-color: #8a2be2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        
+        .update-button:hover {
+            background-color: #9d45e3;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Начало: Подключаем модули в правильном порядке -->
+    <!-- 0. IndexedDB Module - должен загружаться первым, так как используется другими модулями -->
+    <script type="text/babel" src="js/rpg/indexedDB.js?v=1.1.32"></script>
+    
+    <!-- 1. ItemCatalog Module - должен загружаться вторым, так как используется в inventory.js -->
+    <script type="text/babel" src="js/rpg/itemcatalog.js?v=1.1.32"></script>
+    
+    <!-- 2. Остальные основные модули -->
+    <script type="text/babel" src="js/rpg/inventory.js?v=1.1.32"></script>
+    <script type="text/babel" src="js/rpg/modals.js?v=1.1.32"></script>
+    
+    <!-- 3. Crafting Recipes сперва, т.к. он нужен для Crafting модуля -->
+    <script type="text/babel" src="js/rpg/crafting/recipes.js?v=1.1.32"></script>
+    
+    <!-- 4. Crafting Module, должен быть доступен до загрузки основного приложения -->
+    <script type="text/babel" src="js/rpg/crafting/crafting.js?v=1.1.32"></script>
+    
+    <!-- 5. Компоненты костра и печи -->
+    <script type="text/babel" src="js/rpg/crafting/campfire.js?v=1.1.32"></script>
+    <script type="text/babel" src="js/rpg/crafting/furnace.js?v=1.1.32"></script>
+    <!-- Конец подключения модулей -->
+
+        <!-- Подключаю новые страницы добычи -->    <script type="text/babel" src="js/rpg/chop.js?v=1.1.32"></script> 
+            <script type="text/babel" src="js/rpg/mine.js?v=1.1.32"></script>   
+             <script type="text/babel" src="js/rpg/hunt.js?v=1.1.32"></script>    
+                 <!-- Подключаю модуль тренировки -->  
+                    <script type="text/babel" src="js/rpg/training.js?v=1.1.32"></script>     
+                     <!-- Подключаю модули стамины и ручного сбора ресурсов -->    <script src="js/rpg/stats.js?v=1.1.32"></script>    <script src="js/rpg/manualgather.js?v=1.1.32"></script>
+    
+    <div class="rpg-content">
+        <!-- React App Root -->
+        <div id="rpg-app-root"></div>
+    </div>
+
+    <script>
+        // Глобальная переменная для версии приложения, используемая для сброса кэша
+        const APP_VERSION = '1.1.32';
+        
+        // Функция для простого логирования в консоль с временной меткой
+        function logToConsole(message, data = null) {
+            const timestamp = new Date().toLocaleTimeString();
+            if (data) {
+                console.log(`[${timestamp}] RPG: ${message}`, data);
+            } else {
+                console.log(`[${timestamp}] RPG: ${message}`);
+            }
+        }
+        
+        // Функция для логирования ошибок в консоль с временной меткой
+        function logErrorToConsole(message, error = null) {
+            const timestamp = new Date().toLocaleTimeString();
+            if (error) {
+                console.error(`[${timestamp}] RPG ERROR: ${message}`, error);
+            } else {
+                console.error(`[${timestamp}] RPG ERROR: ${message}`);
+            }
+        }
+        
+        // Вспомогательная функция для добавления версии к URL
+        function addVersionToUrl(url) {
+            const separator = url.includes('?') ? '&' : '?';
+            return `${url}${separator}v=${APP_VERSION}&t=${Date.now()}`;
+        }
+        
+        // Функция для проверки версии приложения
+        async function checkAppVersion() {
+            try {
+                logToConsole('Проверка версии приложения...');
+                
+                const response = await fetch(addVersionToUrl('version.php'), {
+                    method: 'GET',
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                logToConsole('Версия на сервере:', data);
+                
+                if (data.success && data.version) {
+                    const serverVersion = data.version;
+                    
+                    // Сравниваем версии
+                    if (serverVersion !== APP_VERSION) {
+                        logToConsole(`Доступна новая версия! Сервер: ${serverVersion}, Текущая: ${APP_VERSION}`);
+                        showVersionNotification(serverVersion);
+                    } else {
+                        logToConsole('Используется актуальная версия приложения');
+                    }
+                }
+            } catch (error) {
+                logErrorToConsole('Ошибка при проверке версии:', error);
+            }
+        }
+        
+        // Функция для отображения уведомления о новой версии
+        function showVersionNotification(newVersion) {
+            // Создаем элемент уведомления
+            const notification = document.createElement('div');
+            notification.className = 'version-notification';
+            notification.innerHTML = `
+                <h3>Update Available</h3>
+                <p>A new version (${newVersion}) is available!</p>
+                <button class="update-button" onclick="forceRefresh()">Update Now</button>
+            `;
+            
+            // Добавляем уведомление на страницу
+            document.body.appendChild(notification);
+        }
+        
+        // Функция для принудительного обновления кэша
+        function forceRefresh() {
+            logToConsole('Принудительное обновление кэша...');
+            
+            // Очищаем кэш через Service Worker, если он доступен
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(registrations => {
+                    for (let registration of registrations) {
+                        registration.unregister();
+                    }
+                });
+            }
+            
+            // Очищаем кэш браузера для данного домена
+            caches.keys().then(cacheNames => {
+                return Promise.all(
+                    cacheNames.map(cacheName => {
+                        return caches.delete(cacheName);
+                    })
+                );
+            }).catch(error => {
+                logErrorToConsole('Ошибка при очистке кэша:', error);
+            });
+            
+            // Получаем актуальную версию с сервера и обновляем локальную версию
+            fetch(addVersionToUrl('version.php'), {
+                method: 'GET',
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.version) {
+                    // Сохраняем новую версию в localStorage
+                    localStorage.setItem('appVersion', data.version);
+                    logToConsole(`Версия приложения обновлена до ${data.version}`);
+                    
+                    // Перезагружаем страницу с параметром для обхода кэша
+                    window.location.href = window.location.href.split('?')[0] + '?nocache=' + Date.now() + '&newVersion=' + data.version;
+                } else {
+                    // Если не удалось получить версию, просто перезагружаем
+                    window.location.href = window.location.href.split('?')[0] + '?nocache=' + Date.now();
+                }
+            })
+            .catch(error => {
+                logErrorToConsole('Ошибка при получении новой версии:', error);
+                // В случае ошибки просто перезагружаем страницу
+                window.location.href = window.location.href.split('?')[0] + '?nocache=' + Date.now();
+            });
+        }
+        
+        // Функция проверки и автоматической регистрации пользователя
+        async function checkAndRegisterUser(telegramId) {
+            try {
+                logToConsole(`Проверка пользователя в базе данных с ID: ${telegramId}`);
+                logToConsole(`Начало подключения к базе данных...`);
+                
+                // Создаем запрос на проверку пользователя с версией для предотвращения кэширования
+                const checkResponse = await fetch(addVersionToUrl('rpg.php?action=checkUser'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ telegramId })
+                });
+                
+                logToConsole(`Статус ответа: ${checkResponse.status} ${checkResponse.statusText}`);
+                
+                // Получаем сырой текст ответа для логирования
+                const responseText = await checkResponse.text();
+                
+                let userData;
+                try {
+                    userData = JSON.parse(responseText);
+                    logToConsole('Ответ от сервера:', userData);
+                } catch (parseError) {
+                    logErrorToConsole('Не удалось разобрать ответ JSON:', responseText);
+                    return false;
+                }
+                
+                if (!userData.success) {
+                    logErrorToConsole('Сервер вернул ошибку:', userData.message || 'Неизвестная ошибка');
+                    return false;
+                }
+                
+                // Проверяем, существует ли пользователь
+                if (userData.exists === true || (userData.data && userData.data.exists === true)) {
+                    logToConsole(`Пользователь найден в базе данных!`);
+                    return true;
+                } else {
+                    logToConsole(`Пользователь не найден. Начинаем автоматическую регистрацию...`);
+                    
+                    // Получаем информацию о пользователе из Telegram (если доступно)
+                    const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+                    let nickname = `player_${telegramId}`;
+                    
+                    if (telegramUser) {
+                        if (telegramUser.username) {
+                            nickname = telegramUser.username;
+                        } else if (telegramUser.first_name) {
+                            nickname = telegramUser.first_name;
+                            if (telegramUser.last_name) {
+                                nickname += telegramUser.last_name;
+                            }
+                        }
+                    }
+                    
+                    logToConsole(`Регистрация нового пользователя с никнеймом: ${nickname}`);
+                    
+                    // Создаем запрос на регистрацию пользователя с версией для предотвращения кэширования
+                    const registerResponse = await fetch(addVersionToUrl('rpg.php?action=createCharacter'), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ telegramId, nickname })
+                    });
+                    
+                    const registerText = await registerResponse.text();
+                    
+                    try {
+                        const registerData = JSON.parse(registerText);
+                        logToConsole('Ответ сервера на регистрацию:', registerData);
+                        
+                        if (registerData.success) {
+                            logToConsole(`Успешная регистрация! ID: ${telegramId}, Никнейм: ${nickname}`);
+                            // Устанавливаем флаг нового пользователя для добавления задержки перед запросом данных
+                            localStorage.setItem('isNewUser', 'true');
+                            return true;
+                        } else {
+                            logErrorToConsole('Ошибка при регистрации:', registerData.message || 'Неизвестная ошибка');
+                            return false;
+                        }
+                    } catch (parseError) {
+                        logErrorToConsole('Не удалось разобрать ответ JSON при регистрации:', registerText);
+                        return false;
+                    }
+                }
+            } catch (error) {
+                logErrorToConsole('Ошибка при проверке/регистрации пользователя:', error);
+                return false;
+            }
+        }
+        
+        // Save Telegram ID to localStorage and initialize
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Инициализация модуля управления логами
+            if (window.DebugModule) {
+                // По умолчанию логи включены, чтобы выключить используйте:
+                // DebugModule.test(false)
+                DebugModule.test(true);
+                logToConsole('Модуль управления логами инициализирован');
+            }
+            
+            logToConsole(`Инициализация RPG приложения (версия ${APP_VERSION})...`);
+            
+            // Проверяем, есть ли параметр newVersion в URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const newVersion = urlParams.get('newVersion');
+            
+            if (newVersion) {
+                logToConsole(`Обнаружена новая версия в URL: ${newVersion}`);
+                // Обновляем глобальную переменную версии
+                window.APP_VERSION = newVersion;
+                logToConsole(`Версия приложения обновлена до ${newVersion}`);
+            }
+            
+            // Проверяем версию приложения
+            await checkAppVersion();
+            
+            // Получаем Telegram ID
+            const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId');
+            
+            if (telegramId) {
+                logToConsole(`Telegram ID получен: ${telegramId}`);
+                localStorage.setItem('telegramId', telegramId);
+                
+                // Log user access с версией для предотвращения кэширования
+                logUserAccess(telegramId);
+                
+                // Проверяем и регистрируем пользователя
+                const userRegistered = await checkAndRegisterUser(telegramId);
+                logToConsole(`Статус пользователя: ${userRegistered ? 'Зарегистрирован' : 'Не зарегистрирован'}`);
+                
+                // Если пользователь зарегистрирован, устанавливаем глобальный флаг
+                if (userRegistered) {
+                    window.userRegistered = true;
+                    
+                    // Создаем событие, чтобы оповестить другие модули о регистрации пользователя
+                    const userRegisteredEvent = new CustomEvent('userRegistered', { detail: { telegramId } });
+                    document.dispatchEvent(userRegisteredEvent);
+                }
+            } else {
+                logErrorToConsole('Telegram ID отсутствует!');
+            }
+            
+            // Apply custom theme
+            applyCustomHeaderTheme();
+            
+            // Check for active crafting sessions
+            if (typeof checkActiveCraftingSessions === 'function') {
+                logToConsole('Checking for active crafting sessions...');
+                checkActiveCraftingSessions();
+            } else {
+                logToConsole('checkActiveCraftingSessions function not available');
+            }
+        });
+
+        // Log user access function
+        function logUserAccess(telegramId) {
+            const userAgent = navigator.userAgent;
+            const deviceInfo = {
+                userAgent: userAgent,
+                platform: navigator.platform,
+                vendor: navigator.vendor,
+                screenSize: `${window.screen.width}x${window.screen.height}`
+            };
+            
+            fetch(addVersionToUrl('../log_access.php'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    telegram_id: telegramId,
+                    device_info: JSON.stringify(deviceInfo),
+                    page: 'source/rpg.html',
+                    app_version: APP_VERSION
+                })
+            }).catch(error => {
+                // Silent error - logging should not block app functionality
+            });
+        }
+
+        // Apply custom theme function
+        const applyCustomHeaderTheme = () => {
+            if (typeof Telegram !== "undefined" && Telegram.WebApp) {
+                Telegram.WebApp.setHeaderColor("#0a0514");
+                Telegram.WebApp.setBackgroundColor("#0a0514");
+                
+                if (Telegram.WebApp.expand) {
+                    Telegram.WebApp.expand();
+                }
+                
+                console.log("Custom header and background colors applied.");
+            } else {
+                console.warn("Telegram WebApp API is not available.");
+            }
+        };
+
+        // Логируем информацию о компонентах
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                logToConsole('Проверка загрузки компонентов костра и печи:');
+                if (window.CraftingModule && window.CraftingModule.CampfireComponent) {
+                    logToConsole('✅ Компонент костра загружен успешно');
+                } else {
+                    logToConsole('❌ Компонент костра не найден!');
+                }
+                
+                if (window.CraftingModule && window.CraftingModule.FurnaceComponent) {
+                    logToConsole('✅ Компонент печи загружен успешно');
+                } else {
+                    logToConsole('❌ Компонент печи не найден!');
+                }
+            }, 1000); // Проверяем через 1 секунду после загрузки
+        });
+    </script>
+
+
+    
+    <!-- RPG Game Script - React Components с версией для предотвращения кэширования -->
+    <script type="text/babel" src="js/rpg/app.js?v=1.1.32"></script>
+    
+
+</body>
+</html> 
