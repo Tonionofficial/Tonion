@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="source/style/webapp.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Oswald:wght@200..700&display=swap" rel="stylesheet">
+    <style>
+    .leaderboard{
+        width: auto;
+    }
+    </style>
+</head>
+
+<body>
+    <div class="main-content">
+        <header class="fixed-header">
+            <div class="header">
+                <p class="onion"><img src="source/images/onion.png" style="height: 30px;" alt="Onion"> <span id="onion">0</span></p>
+                <p class="candy"><img src="source/images/candy30x30.png" alt="Candy"> <span id="candy">0</span></p>
+                <p class="junk"><img src="source/images/Junk.png" style="height: 25px;" alt="junk"><span id="junk">0</span></p>
+                <p class="coin"><img src="source/images/golden onion coin420x420.png" style="height: 26px;" alt="Coin"> <span id="coin">0</span></p>
+            </div>
+        </header>
+        
+        <div class="margintop"></div>
+
+        <section>
+            <div class="container">
+                <div class="slider-container">
+                    <div id="sliderTrack" class="slider-track"></div>
+                    <div class="slider-center-frame"></div>
+                </div>
+                <button class="spinbtn" id="spinBtn">Spin</button>
+                <h2>🏆 Leaderboard</h2>
+                <table class="leaderboard">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Username</th>
+                            <th id="header-onion">Onion 🧅</th>
+                            <th id="header-streak">🔥</th>
+                            <th id="header-referrals">👥</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leaderboard-body">
+                        <tr><td colspan="5">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <div id="modal">
+            <div id="modal-content">
+                <p id="modal-text"></p>
+                <button id="close-modal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="fixed-footer">
+        <div class="buttons">
+            <a class="fbtn" href="webapp.html">Slider</a>
+            <a class="fbtn" href="frends.html">Friends</a>
+            <a class="fbtn rpg-btn" href="source/rpg.html?v=1.1.32">RPG</a>
+            <a class="fbtn" href="earn.html">Earn</a>
+            <a class="fbtn disabled" href="#" onclick="return false;">Play</a>
+        </div>
+    </footer>
+
+    <script>
+
+    // Инициализация IndexedDB для хранения ресурсов пользователя
+    const initUserResourcesDB = () => {
+        return new Promise((resolve, reject) => {
+            console.log('[IndexedDB] Инициализация базы данных пользовательских ресурсов...');
+            
+            // Увеличиваем версию базы данных для полной перестройки структуры
+            const request = indexedDB.open('UserResourcesDB', 10);
+            
+            request.onerror = (event) => {
+                console.error('[IndexedDB] Ошибка при открытии базы данных:', event.target.error);
+                reject(event.target.error);
+            };
+            
+            request.onblocked = (event) => {
+                console.warn('[IndexedDB] База данных заблокирована. Закройте другие вкладки с приложением.');
+                // Пытаемся удалить и пересоздать базу
+                try {
+                    indexedDB.deleteDatabase('UserResourcesDB');
+                    console.log('[IndexedDB] База данных удалена после блокировки.');
+                } catch (e) {
+                    console.error('[IndexedDB] Ошибка при удалении базы данных:', e);
+                }
+                reject(new Error('База данных заблокирована'));
+            };
+            
+            request.onupgradeneeded = (event) => {
+                console.log('[IndexedDB] Обновление структуры базы данных до версии 3...');
+                const db = event.target.result;
+                
+                // Удаляем старые хранилища, если они существуют
+                if (db.objectStoreNames.contains('resources')) {
+                    db.deleteObjectStore('resources');
+                    console.log('[IndexedDB] Удалено старое хранилище "resources"');
+                }
+                if (db.objectStoreNames.contains('resourcesLog')) {
+                    db.deleteObjectStore('resourcesLog');
+                    console.log('[IndexedDB] Удалено старое хранилище "resourcesLog"');
+                }
+                
+                // Создаем новые хранилища
+                // Используем явные ключи (keyPath) и строковые идентификаторы
+                const resourcesStore = db.createObjectStore('resources', { keyPath: 'id' });
+                resourcesStore.createIndex('telegramId', 'telegramId', { unique: true });
+                console.log('[IndexedDB] Создано хранилище "resources" с ключом id');
+                
+                const logsStore = db.createObjectStore('resourcesLog', { autoIncrement: true });
+                logsStore.createIndex('telegramId', 'telegramId', { unique: false });
+                logsStore.createIndex('timestamp', 'timestamp', { unique: false });
+                console.log('[IndexedDB] Создано хранилище "resourcesLog" с автоинкрементным ключом');
+            };
+            
+            request.onsuccess = (event) => {
+                const db = event.target.result;
+                console.log('[IndexedDB] База данных успешно открыта. Версия:', db.version);
+                
+                // Проверка доступности хранилищ
+                const storeNames = Array.from(db.objectStoreNames);
+                console.log('[IndexedDB] Доступные хранилища:', storeNames);
+                
+                if (!storeNames.includes('resources') || !storeNames.includes('resourcesLog')) {
+                    console.error('[IndexedDB] Необходимые хранилища не найдены. Закрытие БД и удаление.');
+                    db.close();
+                    
+                    const deleteRequest = indexedDB.deleteDatabase('UserResourcesDB');
+                    deleteRequest.onsuccess = () => {
+                        console.log('[IndexedDB] База данных удалена после неудачной инициализации.');
+                        reject(new Error('Не удалось создать необходимые хранилища'));
+                    };
+                    deleteRequest.onerror = (e) => {
+                        console.error('[IndexedDB] Ошибка при удалении базы данных:', e.target.error);
+                        reject(e.target.error);
+                    };
+                    return;
+                }
+                
+                resolve(db);
+            };
+        });
+    };
+    
+    // Сохранение ресурсов пользователя в IndexedDB
+    const saveUserResources = async (telegramId, resources) => {
+        try {
+            // Проверка telegramId
+            if (!telegramId) {
+                console.error('[IndexedDB] Ошибка: telegramId не указан');
+                throw new Error('telegramId обязателен для сохранения данных');
+            }
+            
+            // Приводим telegramId к строке и создаем уникальный id записи
+            const telegramIdStr = String(telegramId);
+            const resourceId = `user_${telegramIdStr}`;
+            
+            console.log(`[IndexedDB] Сохранение ресурсов с id=${resourceId} для пользователя ${telegramIdStr}:`, resources);
+            
+            const db = await initUserResourcesDB();
+            
+            return new Promise((resolve, reject) => {
+                try {
+                    const transaction = db.transaction(['resources', 'resourcesLog'], 'readwrite');
+                    
+                    transaction.onerror = (event) => {
+                        console.error('[IndexedDB] Ошибка транзакции:', event.target.error);
+                        reject(event.target.error);
+                    };
+                    
+                    const resourcesStore = transaction.objectStore('resources');
+                    const logsStore = transaction.objectStore('resourcesLog');
+                    
+                    // Чтение существующих данных по id
+                    const getRequest = resourcesStore.get(resourceId);
+                    
+                    getRequest.onsuccess = (event) => {
+                        try {
+                            const currentData = event.target.result;
+                            const timestamp = new Date().toISOString();
+                            
+                            // Создаем обновленный объект ресурсов
+                            const resourceData = {
+                                id: resourceId,            // Явно задаем id для использования в качестве ключа
+                                telegramId: telegramIdStr, // Сохраняем telegramId как строку
+                                ...resources,
+                                lastUpdated: timestamp
+                            };
+                            
+                            console.log('[IndexedDB] Объект для сохранения:', resourceData);
+                            
+                            // Если есть существующие данные, создаем запись лога
+                            if (currentData) {
+                                console.log('[IndexedDB] Найдены существующие данные:', currentData);
+                                
+                                // Проверяем наличие изменений
+                                const hasChanges = Object.keys(resources).some(key => 
+                                    resources[key] !== currentData[key]
+                                );
+                                
+                                if (hasChanges) {
+                                    // Формируем объект изменений
+                                    const changes = {};
+                                    Object.keys(resources).forEach(key => {
+                                        if (resources[key] !== currentData[key]) {
+                                            const oldVal = currentData[key] || 0;
+                                            const newVal = resources[key];
+                                            const diff = newVal - oldVal;
+                                            changes[key] = {
+                                                old: oldVal,
+                                                new: newVal,
+                                                diff: diff
+                                            };
+                                            console.log(`[IndexedDB] Изменение ${key}: ${oldVal} -> ${newVal} (${diff > 0 ? '+' + diff : diff})`);
+                                        }
+                                    });
+                                    
+                                    // Создаем запись в лог
+                                    const logEntry = {
+                                        telegramId: telegramIdStr,
+                                        timestamp,
+                                        resourceId,
+                                        changes,
+                                        prevData: { ...currentData },
+                                        newData: { ...resourceData }
+                                    };
+                                    
+                                    // Добавляем запись в лог
+                                    const addLogRequest = logsStore.add(logEntry);
+                                    addLogRequest.onerror = (e) => {
+                                        console.error('[IndexedDB] Ошибка добавления записи лога:', e.target.error);
+                                    };
+                                } else {
+                                    console.log('[IndexedDB] Изменений не обнаружено, запись в лог не добавлена');
+                                }
+                            } else {
+                                console.log('[IndexedDB] Данные не найдены, создаем новую запись');
+                                
+                                // Запись лога для новой записи
+                                const logEntry = {
+                                    telegramId: telegramIdStr,
+                                    timestamp,
+                                    resourceId,
+                                    type: 'initial',
+                                    data: { ...resourceData }
+                                };
+                                
+                                // Добавляем запись в лог
+                                const addLogRequest = logsStore.add(logEntry);
+                                addLogRequest.onerror = (e) => {
+                                    console.error('[IndexedDB] Ошибка добавления начального лога:', e.target.error);
+                                };
+                            }
+                            
+                            // Сохраняем данные
+                            const putRequest = resourcesStore.put(resourceData);
+                            
+                            putRequest.onsuccess = () => {
+                                console.log('[IndexedDB] Ресурсы успешно сохранены с id:', resourceId);
+                                resolve(true);
+                            };
+                            
+                            putRequest.onerror = (e) => {
+                                console.error('[IndexedDB] Ошибка сохранения ресурсов:', e.target.error);
+                                reject(e.target.error);
+                            };
+                        } catch (innerError) {
+                            console.error('[IndexedDB] Ошибка в обработчике получения данных:', innerError);
+                            reject(innerError);
+                        }
+                    };
+                    
+                    getRequest.onerror = (e) => {
+                        console.error('[IndexedDB] Ошибка чтения данных:', e.target.error);
+                        reject(e.target.error);
+                    };
+                    
+                    transaction.oncomplete = () => {
+                        console.log('[IndexedDB] Транзакция завершена успешно');
+                        db.close();
+                    };
+                } catch (transactionError) {
+                    console.error('[IndexedDB] Ошибка создания транзакции:', transactionError);
+                    reject(transactionError);
+                }
+            });
+        } catch (error) {
+            console.error('[IndexedDB] Общая ошибка сохранения:', error);
+            throw error;
+        }
+    };
+    
+    // Получение ресурсов пользователя из IndexedDB
+    const getUserResources = async (telegramId) => {
+        try {
+            if (!telegramId) {
+                console.error('[IndexedDB] Ошибка: telegramId не указан при получении ресурсов');
+                throw new Error('telegramId обязателен для получения данных');
+            }
+            
+            // Формируем id записи из telegramId
+            const telegramIdStr = String(telegramId);
+            const resourceId = `user_${telegramIdStr}`;
+            
+            console.log(`[IndexedDB] Получение ресурсов для id=${resourceId}`);
+            
+            const db = await initUserResourcesDB();
+            
+            return new Promise((resolve, reject) => {
+                try {
+                    const transaction = db.transaction('resources', 'readonly');
+                    const store = transaction.objectStore('resources');
+                    
+                    // Получаем данные по id
+                    const request = store.get(resourceId);
+                    
+                    request.onsuccess = (event) => {
+                        const result = event.target.result;
+                        
+                        if (result) {
+                            console.log('[IndexedDB] Получены данные ресурсов:', result);
+                            resolve(result);
+                        } else {
+                            console.log('[IndexedDB] Ресурсы не найдены для id:', resourceId);
+                            resolve(null);
+                        }
+                    };
+                    
+                    request.onerror = (e) => {
+                        console.error('[IndexedDB] Ошибка при чтении ресурсов:', e.target.error);
+                        reject(e.target.error);
+                    };
+                    
+                    transaction.oncomplete = () => {
+                        db.close();
+                    };
+                } catch (error) {
+                    console.error('[IndexedDB] Ошибка в транзакции получения ресурсов:', error);
+                    reject(error);
+                }
+            });
+        } catch (error) {
+            console.error('[IndexedDB] Общая ошибка при получении ресурсов:', error);
+            throw error;
+        }
+    };
+    
+    // Получение истории изменений ресурсов
+    const getResourcesHistory = async (telegramId, limit = 10) => {
+        try {
+            if (!telegramId) {
+                console.error('[IndexedDB] Ошибка: telegramId не указан при получении истории');
+                throw new Error('telegramId обязателен для получения истории');
+            }
+            
+            const telegramIdStr = String(telegramId);
+            
+            console.log(`[IndexedDB] Получение истории изменений для пользователя ${telegramIdStr}, лимит: ${limit}`);
+            
+            const db = await initUserResourcesDB();
+            
+            return new Promise((resolve, reject) => {
+                try {
+                    const transaction = db.transaction('resourcesLog', 'readonly');
+                    const store = transaction.objectStore('resourcesLog');
+                    const index = store.index('telegramId');
+                    
+                    const logs = [];
+                    
+                    // Используем курсор для получения последних limit записей
+                    const request = index.openCursor(IDBKeyRange.only(telegramIdStr), 'prev');
+                    
+                    request.onsuccess = (event) => {
+                        const cursor = event.target.result;
+                        
+                        if (cursor && logs.length < limit) {
+                            logs.push(cursor.value);
+                            cursor.continue();
+                        } else {
+                            console.log(`[IndexedDB] Получено ${logs.length} записей истории`);
+                            resolve(logs);
+                        }
+                    };
+                    
+                    request.onerror = (e) => {
+                        console.error('[IndexedDB] Ошибка получения истории:', e.target.error);
+                        reject(e.target.error);
+                    };
+                    
+                    transaction.oncomplete = () => {
+                        db.close();
+                    };
+                } catch (error) {
+                    console.error('[IndexedDB] Ошибка в транзакции получения истории:', error);
+                    reject(error);
+                }
+            });
+        } catch (error) {
+            console.error('[IndexedDB] Общая ошибка при получении истории:', error);
+            throw error;
+        }
+    };
+    
+    // Очистка базы данных IndexedDB
+    const clearIndexedDB = async () => {
+        return new Promise((resolve, reject) => {
+            console.log('[IndexedDB] Выполняется очистка базы данных...');
+            
+            const deleteRequest = indexedDB.deleteDatabase('UserResourcesDB');
+            
+            deleteRequest.onsuccess = () => {
+                console.log('[IndexedDB] База данных успешно удалена');
+                resolve(true);
+            };
+            
+            deleteRequest.onerror = (e) => {
+                console.error('[IndexedDB] Ошибка при удалении базы данных:', e.target.error);
+                reject(e.target.error);
+            };
+            
+            deleteRequest.onblocked = () => {
+                console.warn('[IndexedDB] Удаление базы данных заблокировано. Закройте другие вкладки.');
+                reject(new Error('Удаление базы данных заблокировано'));
+            };
+        });
+    };
+    
+    // Добавляем функцию для отладки и сброса IndexedDB
+    document.addEventListener('DOMContentLoaded', () => {
+        // Глобальная функция для очистки базы данных
+        window.resetIndexedDB = async () => {
+            try {
+                await clearIndexedDB();
+                console.log('[IndexedDB] База данных успешно сброшена. Перезагрузите страницу для пересоздания структуры.');
+                // Перезагружаем страницу для перестройки структуры
+                setTimeout(() => window.location.reload(), 1000);
+                return true;
+            } catch (error) {
+                console.error('[IndexedDB] Ошибка сброса базы данных:', error);
+                return false;
+            }
+        };
+        
+        // Добавляем функцию для тестирования IndexedDB
+        window.testIndexedDB = async () => {
+            try {
+                const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId') || "test_user";
+                console.log('[IndexedDB] Запуск тестового сохранения для пользователя:', telegramId);
+                
+                // Простой тестовый объект
+                const testData = {
+                    onion: 123,
+                    candy: 45,
+                    junk: 67,
+                    coin: 8,
+                    streak: 9,
+                    testField: "Тестовое значение " + new Date().toISOString()
+                };
+                
+                // Сохраняем тестовые данные
+                await saveUserResources(telegramId, testData);
+                
+                // Получаем сохраненные данные
+                const retrievedData = await getUserResources(telegramId);
+                console.log('[IndexedDB] Тестовые данные получены:', retrievedData);
+                
+                // Получаем историю
+                const history = await getResourcesHistory(telegramId, 5);
+                console.log('[IndexedDB] История изменений:', history);
+                
+                return { saved: testData, retrieved: retrievedData, history };
+            } catch (error) {
+                console.error('[IndexedDB] Ошибка тестирования:', error);
+                return { error };
+            }
+        };
+        
+        console.log('[INFO] IndexedDB функции готовы. Для тестирования выполните в консоли: window.testIndexedDB()');
+        console.log('[INFO] Для сброса базы данных выполните: window.resetIndexedDB()');
+    });
+    
+    // Модифицируем функцию loadUserData для работы с IndexedDB
+    const loadUserData = async () => {
+        try {
+            const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId') || "test_user";
+            
+            // Выводим отладочную информацию о telegramId
+            console.log(`[DEBUG] Тип telegramId: ${typeof telegramId}, значение: ${telegramId}`);
+            
+            console.log(`[API] Загрузка данных пользователя ${telegramId} с сервера...`);
+            const response = await fetch("https://test.tonion.io/wheel.php?action=getScores", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ telegramId })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                console.log("[API] Данные успешно получены с сервера:", data);
+                
+                // Обновляем отображение очков
+                onionDisplay.textContent = data.onion;
+                candyDisplay.textContent = data.candy;
+                junkDisplay.textContent = data.junk;
+                coinDisplay.textContent = data.coin;
+                
+                spinsLeft = data.spinsLeft;
+                userStreak = data.streak || 0; // Получаем streak из данных пользователя
+                
+                // Сохраняем полученные ресурсы в IndexedDB
+                try {
+                    // Готовим объект с ресурсами
+                    const resources = {
+                        onion: data.onion,
+                        candy: data.candy,
+                        junk: data.junk,
+                        coin: data.coin,
+                        streak: data.streak || 0,
+                        spinsLeft: data.spinsLeft
+                    };
+                    
+                    console.log(`[IndexedDB] Подготовка к сохранению данных для пользователя ${telegramId}`);
+                    
+                    // Сохраняем в IndexedDB
+                    await saveUserResources(telegramId, resources);
+                    
+                    // Получаем историю изменений (необязательно для отображения пользователю)
+                    const history = await getResourcesHistory(telegramId, 3);
+                    if (history && history.length > 0) {
+                        console.log("[IndexedDB] Последние изменения ресурсов:", history);
+                    }
+                } catch (dbError) {
+                    console.error("[IndexedDB] Ошибка при работе с базой данных:", dbError);
+                }
+                
+                // Отладочная информация
+                console.log(`[DEBUG] ========= User Data Debug Info =========`);
+                console.log(`[DEBUG] Streak: ${userStreak}`);
+                console.log(`[DEBUG] Last login: ${data.lastLogin}`);
+                console.log(`[DEBUG] Current date: ${data.currentDate}`);
+                console.log(`[DEBUG] Server time: ${data.serverTime}`);
+                console.log(`[DEBUG] ========================================`);
+                
+                // Проверяем, есть ли незавершенный спин
+                if (data.pendingSpin === 1) {
+                    // Если есть незавершенный спин, показываем сообщение
+                    showModal("You have a pending spin. Please reload the page to complete it.");
+                    spinBtn.disabled = true;
+                    spinBtn.textContent = "Pending spin...";
+                    return; // Не обновляем кнопку спина
+                }
+
+                // Обновляем состояние кнопки спина
+                updateSpinButton();
+            } else {
+                console.error("[ERROR]: Ошибка при загрузке данных пользователя:", data.message);
+                
+                // Пробуем получить данные из IndexedDB, если сервер недоступен
+                try {
+                    console.log("[IndexedDB] Попытка получить данные из локальной базы данных...");
+                    const localData = await getUserResources(telegramId);
+                    
+                    if (localData) {
+                        console.log("[IndexedDB] Используем локальные данные:", localData);
+                        
+                        // Обновляем отображение очков из локальной базы
+                        onionDisplay.textContent = localData.onion;
+                        candyDisplay.textContent = localData.candy;
+                        junkDisplay.textContent = localData.junk;
+                        coinDisplay.textContent = localData.coin;
+                        
+                        // Обновляем переменные
+                        spinsLeft = localData.spinsLeft || 0;
+                        userStreak = localData.streak || 0;
+                        
+                        // Обновляем кнопку спина
+                        updateSpinButton();
+                        
+                        // Показываем уведомление
+                        showModal("Using offline data. Some features may be limited.");
+                    } else {
+                        console.log("[IndexedDB] Локальные данные не найдены");
+                    }
+                } catch (dbError) {
+                    console.error("[IndexedDB] Ошибка при получении локальных данных:", dbError);
+                }
+            }
+        } catch (error) {
+            console.error("[ERROR]: Ошибка при запросе данных пользователя:", error);
+            
+            // Пробуем получить данные из IndexedDB при ошибке сети
+            const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId') || "test_user";
+            
+            try {
+                console.log("[IndexedDB] Попытка получить данные из локальной базы данных после ошибки сети...");
+                const localData = await getUserResources(telegramId);
+                
+                if (localData) {
+                    console.log("[IndexedDB] Используем локальные данные после ошибки сети:", localData);
+                    
+                    // Обновляем отображение очков из локальной базы
+                    onionDisplay.textContent = localData.onion;
+                    candyDisplay.textContent = localData.candy;
+                    junkDisplay.textContent = localData.junk;
+                    coinDisplay.textContent = localData.coin;
+                    
+                    // Обновляем переменные
+                    spinsLeft = localData.spinsLeft || 0;
+                    userStreak = localData.streak || 0;
+                    
+                    // Обновляем кнопку спина
+                    updateSpinButton();
+                    
+                    // Показываем уведомление
+                    showModal("Network error. Using offline data. Some features will be unavailable.");
+                } else {
+                    console.log("[IndexedDB] Локальные данные не найдены после ошибки сети");
+                    showModal("Network error. Could not load your data.");
+                }
+            } catch (dbError) {
+                console.error("[IndexedDB] Ошибка при получении локальных данных после ошибки сети:", dbError);
+                showModal("Network error. Could not access local data.");
+            }
+        }
+    };
+
+    // Модифицируем функцию spinSlider для работы с IndexedDB
+    const spinSlider = async () => {
+        if (spinning || spinsLeft <= 0) return;
+
+        spinning = true;
+        spinBtn.disabled = true;
+
+        // Сначала уменьшаем количество спинов и проверяем, успешно ли это сделано
+        const spinUpdated = await updateSpins();
+        if (!spinUpdated) {
+            spinning = false;
+            spinBtn.disabled = false;
+            return;
+        }
+
+        const randomIndex = Math.floor(Math.random() * slides.length);
+        const targetIndex = randomIndex + 2 * slides.length;
+        const targetOffset = -(targetIndex * slideWidth);
+
+        sliderTrack.style.transition = "transform 4s ease-out";
+        sliderTrack.style.transform = `translateX(${targetOffset}px)`;
+
+        setTimeout(async () => {
+            // const finalIndex = targetIndex % slides.length;
+            const visibleSlides = 3; // Количество видимых слайдов
+            const finalIndex = (targetIndex + Math.floor(visibleSlides / 2)) % slides.length;
+            const selectedSlide = sliderTrack.children[finalIndex];
+            const type = selectedSlide.getAttribute("data-type");
+            const amount = parseInt(selectedSlide.getAttribute("data-amount"));
+
+            let totalAmount = amount;
+            let bonusText = '';
+            
+            // Если тип Onion, применяем множитель streak
+            if (type === "onion" && userStreak > 0) {
+                const streakBonus = calculateStreakBonus(amount, userStreak);
+                totalAmount += streakBonus;
+                
+                // Вычисляем реальный процент бонуса с учетом ограничения
+                const percentPerDay = 3;
+                const maxBonusPercent = 200;
+                const currentBonusPercent = Math.min(userStreak * percentPerDay, maxBonusPercent);
+                const isMaxBonus = currentBonusPercent >= maxBonusPercent;
+                
+                bonusText = ` <span style="color: #4CAF50;">Including streak bonus +${streakBonus} [${currentBonusPercent}%${isMaxBonus ? ' MAX' : ''}] </span>`;
+            }
+
+            showModal(`Congratulations! You won ${totalAmount} ${type}!${bonusText}`);
+
+            try {
+                const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId') || "test_user";
+                
+                // Обновление данных на сервере
+                await fetch("https://test.tonion.io/wheel.php?action=updatePoints", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        telegramId, 
+                        type, 
+                        amount: totalAmount, 
+                        baseAmount: amount,
+                        streakBonus: type === "onion" ? userStreak : 0
+                    })
+                });
+
+                // Отмечаем спин как завершенный
+                await fetch("https://test.tonion.io/wheel.php?action=completeSpin", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ telegramId })
+                });
+                
+                // Получаем текущие данные из IndexedDB
+                try {
+                    console.log("[IndexedDB] Обновление локальных данных после выигрыша...");
+                    const localData = await getUserResources(telegramId);
+                    
+                    if (localData) {
+                        // Обновляем значение ресурса, который был выигран
+                        const updatedResources = { ...localData };
+                        updatedResources[type] = (updatedResources[type] || 0) + totalAmount;
+                        updatedResources.spinsLeft = (spinsLeft > 0) ? spinsLeft - 1 : 0;
+                        
+                        // Сохраняем обновленные данные
+                        await saveUserResources(telegramId, updatedResources);
+                        console.log(`[IndexedDB] Данные ресурсов успешно обновлены после выигрыша ${totalAmount} ${type}`);
+                    } else {
+                        console.log("[IndexedDB] Локальные данные не найдены для обновления после выигрыша");
+                    }
+                } catch (dbError) {
+                    console.error("[IndexedDB] Ошибка при обновлении локальных данных после выигрыша:", dbError);
+                }
+            } catch (error) {
+                console.error("[ERROR]: Error updating user data:", error);
+            }
+
+            sliderTrack.style.transition = "none";
+            sliderTrack.style.transform = `translateX(0px)`;
+
+            spinning = false;
+            await loadUserData(); // Обновляем данные после завершения спина
+        }, 4000);
+    };
+
+    // Модифицируем документ для отладки IndexedDB
+    document.addEventListener('DOMContentLoaded', () => {
+        // Добавляем функцию для просмотра хранящихся данных в консоли
+        window.debugIndexedDB = async () => {
+            try {
+                const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId') || "test_user";
+                console.log(`[DEBUG] Отладка IndexedDB для пользователя ${telegramId}`);
+                
+                // Получаем текущие ресурсы
+                const resources = await getUserResources(telegramId);
+                console.log("[DEBUG] Текущие ресурсы:", resources);
+                
+                // Получаем историю изменений
+                const history = await getResourcesHistory(telegramId, 10);
+                console.log("[DEBUG] История изменений ресурсов (последние 10):", history);
+                
+                return { resources, history };
+            } catch (error) {
+                console.error("[DEBUG] Ошибка при отладке IndexedDB:", error);
+                return null;
+            }
+        };
+        
+        console.log("[INFO] Приложение инициализировано. Для отладки IndexedDB выполните в консоли: window.debugIndexedDB()");
+    });
+    
+    // Сохраняем Telegram ID в localStorage при загрузке страницы
+    document.addEventListener('DOMContentLoaded', () => {
+        const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || localStorage.getItem('telegramId');
+        if (telegramId) {
+            localStorage.setItem('telegramId', telegramId);
+            
+            // Логируем вход пользователя
+            logUserAccess(telegramId);
+            
+            // Проверяем и обновляем username пользователя
+            updateUserUsername(telegramId);
+        } else {
+            console.error('[ERROR]: Telegram ID отсутствует.');
+        }
+    });
+
+    // Функция для логирования входа пользователя
+    function logUserAccess(telegramId) {
+        // Собираем информацию об устройстве
+        const userAgent = navigator.userAgent;
+        const deviceInfo = {
+            userAgent: userAgent,
+            platform: navigator.platform,
+            vendor: navigator.vendor,
+            screenSize: `${window.screen.width}x${window.screen.height}`
+        };
+        
+        // Отправляем данные на сервер для логирования
+        fetch('log_access.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                telegram_id: telegramId,
+                device_info: JSON.stringify(deviceInfo),
+                page: 'webapp.html'
+            })
+        }).catch(error => {
+            // Тихая ошибка - логирование не должно блокировать работу приложения
+        });
+    }
+
+    // Функция для обновления username пользователя
+    async function updateUserUsername(telegramId) {
+        try {
+            // Получаем данные пользователя из Telegram
+            const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+            let username = null;
+            
+            if (telegramUser) {
+                // Пытаемся получить имя пользователя из Telegram
+                if (telegramUser.username) {
+                    username = telegramUser.username;
+                } else if (telegramUser.first_name) {
+                    // Если нет username, используем имя пользователя
+                    username = telegramUser.first_name;
+                    if (telegramUser.last_name) {
+                        username += ' ' + telegramUser.last_name;
+                    }
+                }
+            }
+            
+            // Отправляем запрос на обновление username
+            const response = await fetch("https://test.tonion.io/wheel.php?action=updateUsername", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    telegramId, 
+                    username 
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log(`[USERNAME] ${data.message}: ${data.username || 'null'}`);
+            } else {
+                console.error("[ERROR]: Error updating username:", data.message || data.error);
+            }
+        } catch (error) {
+            console.error("[ERROR]: Error updating username:", error);
+        }
+    }
+
+    // Изменение цвета фона и заголовка
+    const applyCustomHeaderTheme = () => {
+        if (typeof Telegram !== "undefined" && Telegram.WebApp) {
+            // Устанавливаем цвет верхней рамки
+            Telegram.WebApp.setHeaderColor("#0a0514"); // верхная рамка
+            
+            // Устанавливаем цвет текста в рамке (если поддерживается)
+            Telegram.WebApp.setBackgroundColor("#0a0514"); // Фон заголовка/ нижная рамка
+            Telegram.WebApp.setHeaderTextColor("#0ff"); // Цвет текста
+
+            // Настраиваем экспандирование приложения
+            if (Telegram.WebApp.expand) {
+                Telegram.WebApp.expand();
+            }
+
+            console.log("Custom header and background colors applied.");
+        } else {
+            console.warn("Telegram WebApp API is not available.");
+        }
+    };
+
+    // Применение темы при загрузке страницы
+    document.addEventListener("DOMContentLoaded", () => {
+        applyCustomHeaderTheme();
+
+        // Инициализация основного функционала
+        init();
+    });
+
+    let spinsLeft = 5; // Количество оставшихся прокрутов
+    let timerInterval = null; // Таймер обратного отсчёта
+    let refreshTimer = null; // Таймер для автоматического обновления данных
+    let spinning = false; // Указывает, идёт ли вращение
+    const telegramId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || "test_user";
+    let userStreak = 0; // Текущий streak пользователя
+
+    // Элементы DOM
+    const sliderTrack = document.getElementById("sliderTrack");
+    const spinBtn = document.getElementById("spinBtn");
+    const onionDisplay = document.getElementById("onion");
+    const candyDisplay = document.getElementById("candy");
+    const junkDisplay = document.getElementById("junk");
+    const coinDisplay = document.getElementById("coin");
+    // const tonpointsDisplay = document.getElementById("tonpoints");
+    const modal = document.getElementById("modal");
+    const modalText = document.getElementById("modal-text");
+    const closeModal = document.getElementById("close-modal");
+
+    // Слайды
+    const slides = [
+        { src: "source/images/onion.png", value: "10 Onion", type: "onion", amount: 10 },
+        { src: "source/images/candy.png", value: "Candy", type: "candy", amount: 1 },
+        // { src: "source/images/TONpoints.PNG", value: "10 TONpts", type: "tonpoints", amount: 10 },
+        { src: "source/images/Junk.png", value: "Junk", type: "junk", amount: 1 },
+        { src: "source/images/onion.png", value: "10 Onion", type: "onion", amount: 10 },
+        { src: "source/images/onion.png", value: "50 Onion", type: "onion", amount: 50 },
+        { src: "source/images/Junk.png", value: "Junk", type: "junk", amount: 1 },
+        { src: "source/images/onion.png", value: "10 Onion", type: "onion", amount: 10 },
+        { src: "source/images/candy.png", value: "Candy", type: "candy", amount: 1 },
+        { src: "source/images/onion.png", value: "10 Onion", type: "onion", amount: 10 },
+        { src: "source/images/golden onion coin420x420.png", value: "Coin", type: "coin", amount: 1 }
+    ];
+
+    const slideWidth = 100; // Ширина одного слайда
+    const streakDisplay = document.getElementById("streak");
+
+    // Функция для расчета бонуса от streak
+    const calculateStreakBonus = (baseAmount, streak) => {
+        if (streak <= 0) return 0;
+        
+        // Ограничиваем максимальный бонус до 200%
+        const maxBonusPercent = 200;
+        const percentPerDay = 3;
+        const currentBonusPercent = Math.min(streak * percentPerDay, maxBonusPercent);
+        
+        return Math.floor(baseAmount * (currentBonusPercent / 100));
+    };
+
+
+    const updateStreak = async () => {
+        try {
+            const response = await fetch("https://test.tonion.io/wheel.php?action=updateStreak", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ telegramId })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                userStreak = data.streak || 0;
+                
+                // Проверяем, есть ли сообщение о сбросе/увеличении стрика
+                if (data.message && data.message !== 'You have already logged in today.' && data.message !== 'Too early for streak update.') {
+                    // Формируем сообщение в зависимости от значения стрика
+                    const percentPerDay = 3;
+                    const maxBonusPercent = 200;
+                    const currentBonusPercent = Math.min(userStreak * percentPerDay, maxBonusPercent);
+                    const isMaxBonus = currentBonusPercent >= maxBonusPercent;
+                    const streakBonus = userStreak > 0 ? `<span style="color: #4CAF50;">   +(${currentBonusPercent}%${isMaxBonus ? ' MAX' : ''})</span>` : '';
+                    
+                    if (data.message === 'Streak increased!') {
+                        showModal(`Welcome back! Your streak has increased to ${userStreak} days! ${streakBonus}`);
+                    } else if (data.message === 'Streak reset.') {
+                        showModal(`Welcome back! Your streak has been reset because you missed yesterday. New streak: 1 <span style="color: #4CAF50;">   +(3%)</span>`);
+                    } else if (data.message === 'Streak reset due to long absence.') {
+                        showModal(`Welcome back! Your streak has been reset due to long absence (>48h). New streak: 1 <span style="color: #4CAF50;">   +(3%)</span>`);
+                    }
+                }
+                
+                // Обновляем количество спинов
+                await loadUserData();
+            } else if (data.error) {
+                console.error("[ERROR]: Error updating streak:", data.error);
+            }
+        } catch (error) {
+            console.error("[ERROR]: Error updating streak:", error);
+        }
+    };
+
+    const init = async () => {
+        await updateStreak(); // Проверяем и обновляем streak (и спины)
+        createSlider();
+        
+        // Проверяем, есть ли незавершенный спин
+        try {
+            const response = await fetch("https://test.tonion.io/wheel.php?action=checkPendingSpin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ telegramId })
+            });
+            const data = await response.json();
+            
+            if (data.success && data.pending) {
+                // Есть незавершенный спин, завершаем его случайным результатом
+                showModal("Unfinished spin detected. Completing it with a random result...");
+                
+                // Генерируем случайный результат
+                const randomIndex = Math.floor(Math.random() * slides.length);
+                const type = slides[randomIndex].type;
+                const amount = slides[randomIndex].amount;
+                
+                let totalAmount = amount;
+                let bonusText = '';
+                
+                // Если тип Onion, применяем множитель streak
+                if (type === "onion" && userStreak > 0) {
+                    const streakBonus = calculateStreakBonus(amount, userStreak);
+                    totalAmount += streakBonus;
+                    
+                    // Вычисляем реальный процент бонуса с учетом ограничения
+                    const percentPerDay = 3;
+                    const maxBonusPercent = 200;
+                    const currentBonusPercent = Math.min(userStreak * percentPerDay, maxBonusPercent);
+                    const isMaxBonus = currentBonusPercent >= maxBonusPercent;
+                    
+                    bonusText = ` <span style="color: #4CAF50;">Including streak bonus +${streakBonus} [${currentBonusPercent}%${isMaxBonus ? ' MAX' : ''}] </span>`;
+                }
+                
+                // Начисляем результат
+                try {
+                    await fetch("https://test.tonion.io/wheel.php?action=updatePoints", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ 
+                            telegramId, 
+                            type, 
+                            amount: totalAmount, 
+                            baseAmount: amount,
+                            streakBonus: type === "onion" ? userStreak : 0
+                        })
+                    });
+                    
+                    // Отмечаем спин как завершенный
+                    await fetch("https://test.tonion.io/wheel.php?action=completeSpin", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ telegramId })
+                    });
+                    
+                    showModal(`The unfinished spin has been automatically completed. Result: ${totalAmount} ${type}!${bonusText}`);
+                } catch (error) {
+                    console.error("[ERROR]: Ошибка при обработке незавершенного спина:", error);
+                }
+            }
+        } catch (error) {
+            console.error("[ERROR]: Ошибка при проверке незавершенного спина:", error);
+        }
+        
+        await loadUserData();
+        setupAutoRefresh();
+        loadLeaderboard();
+    };
+
+
+    // Создание слайдера
+    const createSlider = () => {
+        sliderTrack.innerHTML = "";
+        for (let i = 0; i < 10; i++) {
+            slides.forEach(slide => {
+                const slideElem = document.createElement("div");
+                slideElem.className = "slide";
+                slideElem.setAttribute("data-type", slide.type);
+                slideElem.setAttribute("data-amount", slide.amount);
+                slideElem.innerHTML = `
+                    <img src="${slide.src}" alt="${slide.value}">
+                    <span>${slide.value}</span>
+                `;
+                sliderTrack.appendChild(slideElem);
+            });
+        }
+    };
+    // Блокируем кнопку по умолчанию
+    spinBtn.disabled = true;
+
+    // Обновление количества прокрутов
+    const updateSpins = async () => {
+        try {
+            const response = await fetch("https://test.tonion.io/wheel.php?action=updateSpins", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ telegramId })
+            });
+            
+            const data = await response.json();
+
+            if (data.success) {
+                spinsLeft -= 1;
+                updateSpinButton();
+                return true;
+            } else {
+                if (data.pending) {
+                    showModal("You have a pending spin. Please reload the page to complete it.");
+                } else {
+                    console.error("[ERROR]: Error updating spins:", data.message);
+                }
+                return false;
+            }
+        } catch (error) {
+            console.error("[ERROR]: Ошибка при запросе обновления прокрутов:", error);
+            return false;
+        }
+    };
+
+    // Обновление кнопки Spin
+    const updateSpinButton = () => {
+        if (spinsLeft > 0) {
+            spinBtn.disabled = false;
+            spinBtn.textContent = `Spin (${spinsLeft} left)`;
+        } else {
+            spinBtn.disabled = true;
+            spinBtn.textContent = "No spins left";
+        }
+    };
+
+    const loadLeaderboard = async (sortField = 'onion') => {
+        try {
+            // Обновляем выбранное значение в селекте
+            const leaderboardSort = document.getElementById("leaderboard-sort");
+            if (leaderboardSort) {
+                leaderboardSort.value = sortField;
+            }
+            
+            // Обновляем выделение заголовка колонки
+            const headers = {
+                'onion': document.getElementById('header-onion'),
+                'streak': document.getElementById('header-streak'),
+                'total_referrals': document.getElementById('header-referrals')
+                // 'tonpoints': document.getElementById('header-tonpoints')
+            };
+            
+            // Убираем выделение со всех заголовков
+            Object.values(headers).forEach(header => {
+                if (header) header.classList.remove('active-sort');
+            });
+            
+            // Выделяем активный заголовок
+            const activeHeader = headers[sortField];
+            if (activeHeader) activeHeader.classList.add('active-sort');
+            
+            // Отправляем запрос с указанием поля сортировки
+            const response = await fetch("https://test.tonion.io/wheel.php?action=getLeaderboard", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sortField })
+            });
+            
+            const data = await response.json();
+
+            if (data.success) {
+                const leaderboardTable = document.getElementById("leaderboard-body");
+                leaderboardTable.innerHTML = ""; // Очищаем старые данные
+
+                data.leaderboard.forEach((user, index) => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td>${index + 1}</td>
+                        <td>${user.username || "Anonymous"}</td>
+                        <td>${user.onion}</td>
+                        <td>${user.streak || "0"}</td>
+                        <td>${user.total_referrals || "0"}</td>
+                        <!-- <td>${user.tonpoints || "0"}</td> -->
+                    `;
+                    leaderboardTable.appendChild(row);
+                });
+            } else {
+                console.error("[ERROR]: Error loading leaderboard:", data.message);
+            }
+        } catch (error) {
+            console.error("[ERROR]: Error requesting leaderboard data:", error);
+        }
+    };
+
+    // Загружаем таблицу при входе на страницу
+    document.addEventListener("DOMContentLoaded", () => {
+        loadLeaderboard();
+        
+        // Добавляем обработчики кликов по заголовкам колонок
+        const headerMap = {
+            'header-onion': 'onion',
+            'header-streak': 'streak',
+            'header-referrals': 'total_referrals'
+            // 'header-tonpoints': 'tonpoints'
+        };
+        
+        Object.entries(headerMap).forEach(([headerId, sortField]) => {
+            const header = document.getElementById(headerId);
+            if (header) {
+                header.style.cursor = 'pointer'; // Меняем курсор, чтобы показать кликабельность
+                header.addEventListener('click', () => {
+                    loadLeaderboard(sortField);
+                });
+            }
+        });
+    });
+
+    // Показ модального окна
+    const showModal = (message) => {
+        modalText.innerHTML = message; // Используем innerHTML вместо textContent для поддержки HTML-тегов
+        modal.style.display = "flex";
+    };
+
+    closeModal.addEventListener("click", () => {
+        modal.style.display = "none";
+        loadUserData();
+    });
+
+
+    spinBtn.addEventListener("click", spinSlider);
+
+    // Функция для автоматического обновления данных
+    function setupAutoRefresh() {
+        // Периодическое обновление данных каждые 30 секунд
+        refreshTimer = setInterval(() => {
+            if (!spinning) { // Не обновляем, если идет вращение
+                loadUserData();
+                loadLeaderboard();
+                
+                // Проверяем, не прошло ли время сброса (02:00)
+                const currentHour = new Date().getHours();
+                if (currentHour >= 2 && currentHour < 3) {
+                    // Между 2:00 и 3:00 обновляем streak и проверяем сброс spins
+                    updateStreak();
+                }
+            }
+        }, 30000); // 30 секунд
+        
+        // Обновление при восстановлении страницы из скрытого состояния
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && !spinning) {
+                loadUserData();
+                loadLeaderboard();
+            }
+        });
+        
+        // Обновление при фокусе на окне
+        window.addEventListener('focus', () => {
+            if (!spinning) {
+                loadUserData();
+                loadLeaderboard();
+            }
+        });
+    }
+
+    // Вызываем функцию инициализации при загрузке страницы
+    init();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="source/style/webapp.css">
+
+
+    <title>Tonion</title>
+</head>
+
+<body>
+    <header class="fixed-header">
+        <div class="header">
+            <p class="onion"> <img src="source/images/onion.png" style="height: 30px;" alt="Onion"> <span id="onion"> 0</span></p>
+            <p class="candy"> <img src="source/images/candy30x30.png" alt="Candy"> <span id="candy">0</span></p>
+            <p class="junk"> <img src="source/images/Junk.png" style="height: 25px;" alt="junk"><span id="junk">0</span></p>
+            <p class="coin"> <img src="source/images/golden onion coin420x420.png" style="height: 26px;" alt="Coin"> <span id="coin">0</span></p>
+            
+        </div>
+
+</header>
+
+    <section>
+        <script>
+                    const applyCustomHeaderTheme = () => {
+            if (typeof Telegram !== "undefined" && Telegram.WebApp) {
+                // Устанавливаем цвет верхней рамки
+                Telegram.WebApp.setHeaderColor("#1b0b19"); // верхная рамка
+                
+                // Устанавливаем цвет текста в рамке (если поддерживается)
+                Telegram.WebApp.setBackgroundColor("#1b0b19"); // Фон заголовка/ нижная рамка
+                Telegram.WebApp.setHeaderTextColor("#ffffff"); // Цвет текста
+
+                console.log("Custom header and background colors applied.");
+            } else {
+                console.warn("Telegram WebApp API is not available.");
+            }
+        };
+
+        // Применение темы при загрузке страницы
+        document.addEventListener("DOMContentLoaded", () => {
+            applyCustomHeaderTheme();
+
+            // Инициализация основного функционала
+            init();
+        });
+        </script>
+
+    </section>
+    <footer class="fixed-footer">
+        <div class="buttons">
+            <div class="btn">
+                <a class="fbtn" href="webapp.html">Slider</a>
+            </div>
+            <div class="btn">
+                <a class="fbtn" href="frends.html">Frends</a>
+            </div>
+            <div class="btn">
+                <a class="fbtn" href="earn.html">Earn</a>
+            </div>
+            <div class="btn">
+                <a class="fbtn" href="trade.html">Trade</a>
+            </div>
+        </div>
+    </footer>
+
+
+</body>
+
+</html>

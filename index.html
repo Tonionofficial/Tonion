@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-rbsA2VBKQhggwzxH7pPCaAqO46MgnOM80zW1RWuH61DGLwZJEdK2Kadq2F9CUG65" crossorigin="anonymous">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Oswald:wght@200..700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="source/style/style.css?v=2.0">
+
+    <link rel="apple-touch-icon" sizes="180x180" href="source/files/favicon/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="source/files/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="source/files/favicon/favicon-16x16.png">
+    <link rel="manifest" href="/site.webmanifest">
+    <title>Tonion</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+    <!-- Полифиллы и Babel для поддержки современного JavaScript в старых браузерах -->
+    <script src="source/js/lib/babel-polyfill.min.js"></script>
+    <script src="source/js/lib/babel-standalone.min.js"></script>
+    <script>
+    // Проверка, нужно ли использовать Babel
+    document.addEventListener('DOMContentLoaded', function() {
+        var isModernBrowser = window.Babel && typeof window.Babel.isModernBrowser === 'function' 
+            ? window.Babel.isModernBrowser() 
+            : false;
+        
+        console.log('Modern browser with ES6+ support: ' + isModernBrowser);
+        
+        // Если браузер старый, добавляем атрибут type="text/babel" всем скриптам с современным JS
+        if (!isModernBrowser) {
+            var scripts = document.querySelectorAll('script[data-use-babel="true"]');
+            for (var i = 0; i < scripts.length; i++) {
+                scripts[i].setAttribute('type', 'text/babel');
+            }
+        }
+    });
+    </script>
+
+</head>
+
+<body>
+    <div id="particles-js"></div>
+    <div class="main-content">
+
+        <header class="fixed-header">
+            <div class="container">
+                <nav class="navbar navbar-expand-lg">
+                    <div class="container-fluid">
+                        <a class="navbar-brand" href="javascript:void(0)" onclick="scrollToSection('Home')"> <img
+                            style="width: 50px; margin-right: 10px;" src="source/images/tonion1nobgsmall.PNG" alt="Tonion Logo"></a>
+                        <a class="navbar-brand" href="javascript:void(0)" onclick="scrollToSection('Home')"> <img
+                                style="width: 150px;" src="source/images/tonionlog1500x500cut.PNG" alt="Logo"></a>
+                                
+                        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                            <span class="navbar-toggler-icon"></span>
+                        </button>
+
+
+                        <div class="collapse navbar-collapse" id="navbarNav">
+                            <ul class="navbar-nav">
+                                <li class="nav-item">
+                                    <a id="nav-btn" class="nav-link " href="javascript:void(0)"
+                                        onclick="scrollToSection('Home')">Home</a>
+                                </li>
+                                <li class="nav-item">
+                                    <a id="nav-btn" class="nav-link " data-sound="click.wav" href="javascript:void(0)"
+                                        onclick="scrollToSection('About')">About</a>
+                                </li>
+                                <li class="nav-item">
+                                    <a id="nav-btn" class="nav-link " data-sound="click.wav" href="javascript:void(0)"
+                                        onclick="scrollToSection('Tokenomics')">Tokenomics</a>
+                                </li>
+                                <li class="nav-item">
+                                    <a id="nav-btn" class="nav-link " data-sound="click.wav" href="javascript:void(0)"
+                                        onclick="scrollToSection('Roadmap')">Roadmap</a>
+                                </li>
+                            </ul>
+                            <div class="media-links">
+                                <a class="media nav-link" data-sound="click.wav" href="https://t.me/Tonion_Official">
+                                    <img style="width: 75px;" src="source/images/tg loggo.png" alt="TG Logo">
+                                </a>
+                                <a class="media2 nav-link" data-sound="click.wav" href="https://x.com/TONion_io"
+                                    target="_blank">
+                                    <img style="width: 65px;" src="source/images/Twlogo.png" alt="X Logog">
+                                </a>
+                                <a class="nav-link buybtn" data-sound="click.wav"
+                                    href="https://t.me/blum/app?startapp=memepadjetton_TONION_wQ75P-ref_2hCXbmgmXW">Buy
+                                    Now</a>
+                            </div>
+                        </div>
+                    </div>
+                </nav>
+    
+            </div>
+        </header>
+    
+        <section id="Home" class="page1">
+            <div class="container">
+                <div class="row home-grid">
+                    <div class="col1">
+                        <h2 class="border1">TONion - Whole world in one app</h2>
+                        <div class="col3">
+                            <h3 class="border3">RPG with AI-driven World Bosses, epic skills, mini-games, chats, memes, and crypto trading—all in one thrilling universe.</h3>
+                        </div>
+                    </div>
+                    <div class="col2">
+                        <img class="imglogo" src="source/images/cyberTonionNOBG.png" alt="Tonion logo">
+                    </div>
+                </div>
+                <div class="Launch">
+                    <a class="nav-link Launch-game" href="https://t.me/TONion_World_bot" target="_blank" data-sound="click.wav">Launch App</a>
+                </div>
+            </div>
+        </section>
+        <section id="About" class="page2">
+            <div class="slider-container">
+                <div class="slider-indicator">
+                    <div class="slider-indicator-dot active"></div>
+                    <div class="slider-indicator-dot"></div>
+                    <div class="slider-indicator-dot"></div>
+                    <div class="slider-indicator-dot"></div>
+                </div>
+                <div class="slider">
+                    <div class="slide active">
+                        <div class="slide-content">
+                            <h2>About Tonion</h2>
+                            <p>Tonion is a revolutionary Telegram-based Web App platform that combines gaming, social interaction, and cryptocurrency trading in one immersive experience.</p>
+                            <ul>
+                                <li>RPG with AI-driven World Bosses</li>
+                                <li>Epic skills and abilities</li>
+                                <li>Engaging mini-games</li>
+                                <li>Social chat features</li>
+                                <li>Meme trading platform</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="slide">
+                        <div class="slide-content">
+                            <h2>Gaming Features</h2>
+                            <p>Dive into an exciting world of gaming possibilities:</p>
+                            <ul>
+                                <li>PVE/PVP battles</li>
+                                <li>Character customization</li>
+                                <li>Skill trees and progression</li>
+                                <li>Team-based missions</li>
+                                <li>Leaderboards and achievements</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="slide">
+                        <div class="slide-content">
+                            <h2>Trading & Rewards</h2>
+                            <p>Earn and trade in our ecosystem:</p>
+                            <ul>
+                                <li>Meme-based DEX trading</li>
+                                <li>Daily rewards and quests</li>
+                                <li>Weekly tournaments</li>
+                                <li>Monthly special events</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div style="" class="slide">
+                        <div class="slide-content">
+                            <h2>Community Benefits</h2>
+                            <p>Join our thriving community:</p>
+                            <ul>
+                                <li>Exclusive NFT drops</li>
+                                <li>Community governance</li>
+                                <li>Special member perks</li>
+                                <li>Regular community events</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section id="Tokenomics" class="page3">
+            <div class="container">
+                <div class="row">
+                    <div>
+                        <h2 class="s2r1">Tokenomics</h2>
+                        <div class="s2r2 token">
+                            <h3>Token max supply: 1,000,000,000</h3>
+                            <a href="https://tonviewer.com/EQCNCt7iYHPe8yLyLgCYL7P3IvKmpo84Q9jqr3uaF2OZFwcG"
+                                target="_blank">
+                                <h3>TONion Contract</h3>
+                            </a>
+                            <p class="reserv-text">Reserved funds are stored at Creator wallet</p>
+                        </div>
+                        <div class="tokenomics-grid">
+                            <div class="token-card">
+                                <h4>100Mil</h4>
+                                <p>reserved for community Airdrop</p>
+                            </div>
+                            <div class="token-card">
+                                <h4>50Mil</h4>
+                                <p>reserved for DEX/CEX events</p>
+                            </div>
+                            <div class="token-card">
+                                <h4>850Mil</h4>
+                                <p>available for anyone to purchase on the open market</p>
+                            </div>
+                        </div>
+                        <div class="token-action">
+                            <a class="nav-link buybtn bbtn2"
+                                href="https://t.me/blum/app?startapp=memepadjetton_TONION_wQ75P-ref_2hCXbmgmXW">Buy Now</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section id="Roadmap" class="page3" style="display: block !important; visibility: visible !important; min-height: 100vh; padding-top: 120px;">
+            <div class="container">
+                <div class="row">
+                    <div>
+                        <h2 class="s2r1" style="margin-bottom: 5rem;">Roadmap</h2>
+                        <div class="roadmap-container" style="display: block !important; visibility: visible !important; margin-top: 2rem;">
+                            <div class="roadmap-timeline" style="opacity: 1; transform: translateY(0); margin: 20rem auto 4rem;">
+                                <div class="timeline-point" data-phase="1" style="opacity: 1; transform: translateY(-50%);">
+                                    <div class="point-marker"></div>
+                                    <div class="point-content">
+                                        <h3>Q1 2025</h3>
+                                        <div class="point-short">Launch and Basic Features</div>
+                                        <div class="point-full">
+                                            <p>Official launch of TONion with basic gameplay mechanics and social features. And community building phase.</p>
+                                            <ul>
+                                                <li>Platform Development</li>
+                                                <li>Initial Token Launch</li>
+                                                <li>Community Building</li>
+                                                <li>Basic Game Features Implementation</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="timeline-point" data-phase="2" style="opacity: 1; transform: translateY(-50%);">
+                                    <div class="point-marker"></div>
+                                    <div class="point-content">
+                                        <h3>Q1/early Q2 2025</h3>
+                                        <div class="point-short">Launch of RPG game</div>
+                                        <div class="point-full">
+                                            <p>Expanding core gameplay with RPG game. PVE battles and advanced character progression.PVE/PVP mini games.</p>
+                                            <ul>
+                                                <li>RPG Gameplay integration</li>
+                                                <li>Advanced Character Customization</li>
+                                                <li></li>
+                                                <li></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="timeline-point" data-phase="3" style="opacity: 1; transform: translateY(-50%);">
+                                    <div class="point-marker"></div>
+                                    <div class="point-content">
+                                        <h3>Q2 2025</h3>
+                                        <div class="point-short">AI Integration & Expansion</div>
+                                        <div class="point-full">
+                                            <p>Integration of AI-driven world bosses and events. Expansion of mini-games and introduction of tournaments with prize pools.</p>
+                                            <ul>
+                                                <li>AI-Driven World Bosses</li>
+                                                <li>Tournament System</li>
+                                                <li>Expanded Mini-Games</li>
+                                                <li>Enhanced Rewards System</li>
+                                                <li>Enhanced Crafting System</li>
+                                                <li>First NFT collection for early supporters</li>
+                                                <li>First Airdrop for early supporters</li>
+                                                <li>Marketing/advertising campaign</li>
+                                                <li>And many more...</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="timeline-point" data-phase="4" style="opacity: 1; transform: translateY(-50%);">
+                                    <div class="point-marker"></div>
+                                    <div class="point-content">
+                                        <h3>Q3 2025</h3>
+                                        <div class="point-short">Global Ecosystem & Partnerships</div>
+                                        <div class="point-full">
+                                            <p>Full ecosystem development with cross-platform integration. Strategic partnerships with major exchanges and gaming platforms.</p>
+                                            <ul>
+                                                <li>Cross-Platform Support</li>
+                                                <li>Major Exchange Listings</li>
+                                                <li>Strategic Gaming Partnerships</li>
+                                                <li>Community Governance Implementation</li>
+                                                <li>Second Airdrop</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="row footer-grid">
+                <div class="footer-text1">
+                    <p>© TONion All rights reserved.</p>
+                </div>
+                <div class="footer-text2">
+                    <a class="nav-link buybtn contact" href="contactus.html">Contact us</a>
+
+                </div>
+            </div>
+
+        </div>
+
+    </footer>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+jjXkk+Q2h455rYXK/7HAuoJl+0I4"
+    crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/particles.js/2.0.0/particles.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+
+<script>
+    // Page loading animation and slider functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(() => {
+            document.querySelector('.loading-overlay').classList.add('fade-out');
+            setTimeout(() => {
+                document.querySelector('.loading-overlay').style.display = 'none';
+            }, 600);
+        }, 1500);
+        
+        // Enhanced interactive particles.js
+        particlesJS("particles-js", {
+            particles: {
+                number: { 
+                    value: 100, 
+                    density: { enable: true, value_area: 800 } 
+                },
+                color: { value: ["#0ff", "#f0f", "#2a00e5"] },
+                shape: {
+                    type: ["circle", "triangle", "polygon"],
+                    stroke: { width: 0, color: "#000000" },
+                    polygon: { nb_sides: 6 },
+                },
+                opacity: {
+                    value: 0.6,
+                    random: true,
+                    anim: { 
+                        enable: true, 
+                        speed: 1, 
+                        opacity_min: 0.1, 
+                        sync: false 
+                    }
+                },
+                size: {
+                    value: 4,
+                    random: true,
+                    anim: { 
+                        enable: true, 
+                        speed: 2, 
+                        size_min: 0.1, 
+                        sync: false 
+                    }
+                },
+                line_linked: {
+                    enable: true,
+                    distance: 150,
+                    color: "#f0f",
+                    opacity: 0.4,
+                    width: 1,
+                    shadow: {
+                        enable: true,
+                        color: "#0ff",
+                        blur: 5
+                    }
+                },
+                move: {
+                    enable: true,
+                    speed: 2,
+                    direction: "none",
+                    random: true,
+                    straight: false,
+                    out_mode: "out",
+                    bounce: false,
+                    attract: { 
+                        enable: true, 
+                        rotateX: 600, 
+                        rotateY: 1200 
+                    }
+                }
+            },
+            interactivity: {
+                detect_on: "window",
+                events: {
+                    onhover: { 
+                        enable: true, 
+                        mode: "repulse" 
+                    },
+                    onclick: { 
+                        enable: true, 
+                        mode: "push" 
+                    },
+                    onscroll: {
+                        enable: true, 
+                        mode: "connect"
+                    },
+                    resize: true
+                },
+                modes: {
+                    grab: { 
+                        distance: 200, 
+                        line_linked: { opacity: 1 } 
+                    },
+                    bubble: { 
+                        distance: 400, 
+                        size: 40, 
+                        duration: 2, 
+                        opacity: 8, 
+                        speed: 3 
+                    },
+                    repulse: { 
+                        distance: 150, 
+                        duration: 0.4 
+                    },
+                    push: { 
+                        particles_nb: 4 
+                    },
+                    remove: { 
+                        particles_nb: 2 
+                    },
+                    connect: {
+                        distance: 80,
+                        radius: 120,
+                        links: { opacity: 0.5 }
+                    }
+                }
+            },
+            retina_detect: true,
+            fps_limit: 60
+        });
+        
+        // Add scroll event listeners to sections for parallax effect
+        const sections = document.querySelectorAll('section');
+        sections.forEach(section => {
+            section.addEventListener('mousemove', createParallaxEffect);
+        });
+        
+        // Custom cursor
+        const cursor = document.querySelector('.cursor');
+        const follower = document.querySelector('.cursor-follower');
+        
+        document.addEventListener('mousemove', function(e) {
+            cursor.style.left = e.clientX + 'px';
+            cursor.style.top = e.clientY + 'px';
+            
+            // Create ripple effect on mouse move
+            createRippleEffect(e.clientX, e.clientY);
+            
+            setTimeout(function() {
+                follower.style.left = e.clientX + 'px';
+                follower.style.top = e.clientY + 'px';
+            }, 100);
+        });
+        
+        // Create ripple effect at cursor position
+        function createRippleEffect(x, y) {
+            // Only create a ripple occasionally to avoid overwhelming effects
+            if (Math.random() > 0.95) {
+                const ripple = document.createElement('div');
+                ripple.className = 'ripple';
+                ripple.style.left = x + 'px';
+                ripple.style.top = y + 'px';
+                document.body.appendChild(ripple);
+                
+                // Remove ripple after animation completes
+                setTimeout(() => {
+                    ripple.remove();
+                }, 1000);
+            }
+        }
+        
+        // Parallax effect for elements on mouse movement
+        function createParallaxEffect(e) {
+            const section = e.currentTarget;
+            const moveX = (e.clientX - window.innerWidth / 2) * 0.01;
+            const moveY = (e.clientY - window.innerHeight / 2) * 0.01;
+            
+            // Apply parallax to elements within the section
+            const elements = section.querySelectorAll('.border1, .border3, .cyber-card, .cyber-feature, .data-circle');
+            elements.forEach(el => {
+                const speed = el.getAttribute('data-speed') || (Math.random() * 4 + 1);
+                const x = moveX * speed;
+                const y = moveY * speed;
+                el.style.transform = `translateX(${x}px) translateY(${y}px)`;
+            });
+        }
+        
+        // Interactive wave effect on scroll
+        let wave = document.createElement('div');
+        wave.className = 'wave-effect';
+        document.body.appendChild(wave);
+        
+        window.addEventListener('scroll', function() {
+            const scrollY = window.scrollY;
+            // Adjust wave parameters based on scroll position
+            wave.style.opacity = Math.min(0.3, scrollY / 1000);
+            wave.style.transform = `translateY(${scrollY * 0.3}px)`;
+        });
+        
+        // Counter animation
+        const counters = document.querySelectorAll('.counter');
+        const speed = 200;
+        
+        counters.forEach(counter => {
+            const updateCount = () => {
+                const target = +counter.getAttribute('data-target');
+                const count = +counter.innerText.replace(/,/g, '');
+                const increment = target / speed;
+                
+                if (count < target) {
+                    counter.innerText = Math.ceil(count + increment).toLocaleString();
+                    setTimeout(updateCount, 1);
+                } else {
+                    counter.innerText = target.toLocaleString();
+                }
+            };
+            
+            const observer = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting) {
+                    updateCount();
+                    observer.disconnect();
+                }
+            });
+            
+            observer.observe(counter);
+        });
+        
+        // Magnetic effect for buttons
+        const buttons = document.querySelectorAll('.cyber-btn-lg, .cyber-btn-sm');
+        buttons.forEach(btn => {
+            btn.addEventListener('mousemove', function(e) {
+                const rect = this.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Calculate the distance from center in percentage
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                
+                const deltaX = (x - centerX) / centerX * 10;
+                const deltaY = (y - centerY) / centerY * 10;
+                
+                this.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+            });
+            
+            btn.addEventListener('mouseleave', function() {
+                this.style.transform = 'translate(0, 0)';
+            });
+        });
+        
+        // Slider functionality
+        const slider = document.querySelector('.slider');
+        const slides = document.querySelectorAll('.slide');
+        const indicatorDots = document.querySelectorAll('.slider-indicator-dot');
+        let currentSlide = 0;
+        let isAutoSliding = true;
+        let isAnimating = false;
+        let autoSlideInterval;
+
+        function updateSlider() {
+            if (isAnimating) return;
+            isAnimating = true;
+            
+            // Reset all slides
+            slides.forEach(slide => {
+                slide.classList.remove('active');
+                // Remove inline styles to apply CSS rules
+                slide.style.width = '';
+                slide.style.height = '';
+                slide.style.left = '';
+                slide.style.top = '';
+            });
+            
+            // Activate current slide
+            slides[currentSlide].classList.add('active');
+            slides[currentSlide].style.left = '0';
+            slides[currentSlide].style.top = '0';
+            slides[currentSlide].style.width = '100%';
+            slides[currentSlide].style.height = '100%';
+            
+            // Update indicators
+            indicatorDots.forEach((dot, index) => {
+                dot.classList.toggle('active', index === currentSlide);
+            });
+            
+            setTimeout(() => {
+                isAnimating = false;
+            }, 500);
+        }
+
+        function nextSlide() {
+            if (isAnimating) return;
+            currentSlide = (currentSlide + 1) % slides.length;
+            updateSlider();
+        }
+
+        function prevSlide() {
+            if (isAnimating) return;
+            currentSlide = (currentSlide - 1 + slides.length) % slides.length;
+            updateSlider();
+        }
+
+        function goToSlide(index) {
+            if (isAnimating || index === currentSlide) return;
+            currentSlide = index;
+            updateSlider();
+        }
+
+        // Auto-sliding
+        function startAutoSlide() {
+            if (!isAutoSliding) return;
+            autoSlideInterval = setInterval(nextSlide, 3000);
+        }
+
+        function stopAutoSlide() {
+            clearInterval(autoSlideInterval);
+        }
+
+        // Event listeners for slider
+        if (slider) {
+            slider.addEventListener('mouseenter', stopAutoSlide);
+            slider.addEventListener('mouseleave', startAutoSlide);
+
+            // Add click handlers for slides
+            slides.forEach((slide, index) => {
+                slide.addEventListener('click', () => {
+                    if (index !== currentSlide) {
+                        goToSlide(index);
+                    }
+                });
+            });
+
+            // Add click handlers for indicators
+            indicatorDots.forEach((dot, index) => {
+                dot.addEventListener('click', () => {
+                    goToSlide(index);
+                });
+            });
+
+            // Initialize slider
+            updateSlider();
+            startAutoSlide();
+        }
+
+        // Navbar collapse on mobile
+        const navLinks = document.querySelectorAll('.nav-link');
+        const navbarCollapse = document.getElementById('navbarNav');
+        
+        navLinks.forEach((link) => {
+            link.addEventListener('click', () => {
+                // Check if Bootstrap is available and if navbar is shown
+                if (window.bootstrap && navbarCollapse.classList.contains('show')) {
+                    const bsCollapse = new bootstrap.Collapse(navbarCollapse);
+                    bsCollapse.hide();
+                }
+            });
+        });
+
+        // Roadmap Timeline Interaction
+        const timelinePoints = document.querySelectorAll('.timeline-point');
+        
+        // Toggle active state for click on mobile
+        timelinePoints.forEach(point => {
+            point.addEventListener('click', function() {
+                // For mobile devices, toggle active class
+                if (window.innerWidth <= 768) {
+                    const isActive = this.classList.contains('active');
+                    
+                    // Remove active class from all points
+                    timelinePoints.forEach(p => p.classList.remove('active'));
+                    
+                    // Toggle active class on clicked point
+                    if (!isActive) {
+                        this.classList.add('active');
+                    }
+                }
+            });
+            
+            // For desktop, show active state on hover
+            point.addEventListener('mouseenter', function() {
+                if (window.innerWidth > 768) {
+                    timelinePoints.forEach(p => p.classList.remove('active'));
+                    this.classList.add('active');
+                }
+            });
+            
+            point.addEventListener('mouseleave', function() {
+                if (window.innerWidth > 768) {
+                    this.classList.remove('active');
+                }
+            });
+        });
+        
+        // Add animation on scroll
+        const roadmapSection = document.getElementById('Roadmap');
+        const timeline = document.querySelector('.roadmap-timeline');
+        
+        if (roadmapSection && timeline) {
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        timeline.style.opacity = '1';
+                        timeline.style.transform = 'translateY(0)';
+                        
+                        // Animate each point with delay
+                        timelinePoints.forEach((point, index) => {
+                            setTimeout(() => {
+                                point.style.opacity = '1';
+                                point.style.transform = 'translateY(-50%)';
+                            }, 300 * (index + 1));
+                        });
+                        
+                        observer.disconnect();
+                    }
+                });
+            }, { threshold: 0.3 });
+            
+            observer.observe(roadmapSection);
+        }
+    });
+    
+    // Function to scroll to section - used by navbar links
+    function scrollToSection(sectionId) {
+        const section = document.getElementById(sectionId);
+        if (section) {
+            section.scrollIntoView({ behavior: 'smooth' });
+        }
+    }
+
+    createDigitalRain();
+</script>
+
+</body>
+</html>
